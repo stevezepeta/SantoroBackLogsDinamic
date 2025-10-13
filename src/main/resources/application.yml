@@ -4,4 +4,3 @@ spring:
   data:
     mongodb:
       uri: mongodb://localhost:27017/logs_system
-      auto-index-creation: true   # crea los índices de tus @Indexed/@CompoundIndex

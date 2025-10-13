@@ -15,18 +15,15 @@ import org.springframework.data.mongodb.core.mapping.Field;
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 @org.springframework.data.mongodb.core.mapping.Document(collection = "dashboards")
 @CompoundIndexes({
-@CompoundIndex(name = "ix_dash_tenant_owner", def = "{ 'tenant_id': 1, 'owner_id': 1 }"),
-@CompoundIndex(name = "ix_dash_public", def = "{ 'is_public': 1 }")
+  @CompoundIndex(name = "ix_dash_tenant_owner", def = "{ 'tenant_id': 1, 'owner_id': 1 }"),
+  @CompoundIndex(name = "ix_dash_public", def = "{ 'is_public': 1 }")
 })
 public class Dashboard extends BaseEntity {
-@Field("tenant_id")
-private ObjectId tenantId;
-@Field("owner_id")
-private ObjectId ownerId; // ref users
-private String name;
-private String description;
-private Document definition; // widgets, queries, layout
-@Field("is_public")
-@Indexed
-private Boolean isPublic;
+  @Field("tenant_id") private ObjectId tenantId;
+  @Field("owner_id") private ObjectId ownerId;
+  private String name;
+  private String description;
+  private Document definition;
+  @Field("is_public")
+  private Boolean isPublic;   // << sin @Indexed aquí
 }
