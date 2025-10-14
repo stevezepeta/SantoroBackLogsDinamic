@@ -24,9 +24,9 @@ public class Audit extends BaseEntity {
 @Field("tenant_id")
 private ObjectId tenantId;
 @Field("actor_id")
-private ObjectId actorId; // ref users
-private String action; // CREATE_SYSTEM|ROTATE_KEY|UPDATE_SCHEMA ...
-private Document target; // { type, id }
+private ObjectId actorId; 
+private String action; 
+private Document target; 
 private Document metadata;
 @Indexed
 private Instant at;

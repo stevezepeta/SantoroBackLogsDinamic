@@ -25,5 +25,5 @@ public class Dashboard extends BaseEntity {
   private String description;
   private Document definition;
   @Field("is_public")
-  private Boolean isPublic;   // << sin @Indexed aquí
+  private Boolean isPublic;   
 }

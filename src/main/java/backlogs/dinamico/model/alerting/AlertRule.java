@@ -24,8 +24,8 @@ private ObjectId tenantId;
 @Field("system_id")
 private ObjectId systemId;
 private String name;
-private Document query; // filtro de log_events + ventana de tiempo
-private Document threshold; // conteo, severidad, tasa, etc.
-private List<ObjectId> channels; // ids de alert_channels
-private String status; // active|paused
+private Document query; 
+private Document threshold;
+private List<ObjectId> channels; 
+private String status; 
 }

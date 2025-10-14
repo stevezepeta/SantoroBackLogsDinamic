@@ -1,7 +1,18 @@
 spring:
-  application:
-    name: backlogs
   data:
     mongodb:
       uri: mongodb://localhost:27017/logs_system
-      auto-index-creation: true   
+  data.mongodb.auto-index-creation: true
+
+multitenant:
+  strategy: collection-per-tenant   
+  base-database: logs_system
+  log-collection: log_events
+  ensure-indexes: true
+  require-api-key: true
+
+security:
+  basic:
+    enabled: false
+  catalogs:
+    protect-writes: false

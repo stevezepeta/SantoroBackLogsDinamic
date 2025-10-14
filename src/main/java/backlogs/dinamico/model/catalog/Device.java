@@ -23,8 +23,8 @@ private ObjectId tenantId;
 @Field("system_id")
 private ObjectId systemId;
 @Field("location_id")
-private ObjectId locationId; // ref offices
-private String code; // id lógico del dispositivo
+private ObjectId locationId; 
+private String code; 
 private String model;
-private String status; // active|retired
+private String status; 
 }

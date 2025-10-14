@@ -29,6 +29,6 @@ private ObjectId ruleId;
 private Instant openedAt;
 @Field("closed_at")
 private Instant closedAt;
-private String status; // open|ack|closed
+private String status; 
 private Document context;
 }
