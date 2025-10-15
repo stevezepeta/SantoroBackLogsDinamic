@@ -22,36 +22,36 @@ import java.time.Instant;
 @CompoundIndex(name = "ix_err_time", def = "{ 'tenant_id': 1, 'error_code_id': 1, 'event_at': 1 }")
 })
 public class LogEvent extends BaseEntity {
-@Field("tenant_id")
-private ObjectId tenantId;
-@Field("system_id")
-private ObjectId systemId;
-@Field("environment_id")
-private ObjectId environmentId;
-@Field("schema_id")
-private ObjectId schemaId;
-@Field("session_id")
-@Indexed
-private ObjectId sessionId;
-@Field("device_id")
-@Indexed
-private ObjectId deviceId;
-@Field("office_id")
-private ObjectId officeId;
-@Field("event_type_id")
-private ObjectId eventTypeId;
-@Field("error_code_id")
-private ObjectId errorCodeId;
-@Field("ingested_at")
-private Instant ingestedAt; // cuando llegó al backend
-@Field("event_at")
-private Instant eventAt; // cuando ocurrió en origen
-private String severity; // DEBUG|INFO|WARN|ERROR|FATAL
-@Field("trace_id")
-@Indexed
-private String traceId;
-@Field("span_id")
-private String spanId;
-private Document source; // ip, host, agent, env vars
-private Document payload; // cuerpo validado con schema activo
+    @Field("tenant_id")
+    private ObjectId tenantId;
+    @Field("system_id")
+    private ObjectId systemId;
+    @Field("environment_id")
+    private ObjectId environmentId;
+    @Field("schema_id")
+    private ObjectId schemaId;
+    @Field("session_id")
+    @Indexed
+    private ObjectId sessionId;
+    @Field("device_id")
+    @Indexed
+    private ObjectId deviceId;
+    @Field("office_id")
+    private ObjectId officeId;
+    @Field("event_type_id")
+    private ObjectId eventTypeId;
+    @Field("error_code_id")
+    private ObjectId errorCodeId;
+    @Field("ingested_at")
+    private Instant ingestedAt; // cuando llegó al backend
+    @Field("event_at")
+    private Instant eventAt; // cuando ocurrió en origen
+    private String severity; // DEBUG|INFO|WARN|ERROR|FATAL
+    @Field("trace_id")
+    @Indexed
+    private String traceId;
+    @Field("span_id")
+    private String spanId;
+    private Document source; // ip, host, agent, env vars
+    private Document payload; // cuerpo validado con schema activo
 }
