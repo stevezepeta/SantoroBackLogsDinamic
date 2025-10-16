@@ -22,7 +22,8 @@ public class TenantFilter extends OncePerRequestFilter {
                 res.sendError(400, "X-Tenant inválido o ausente");
                 return;
             }
-            TenantContext.set(tenantHex);
+            TenantContext.clear();
+            TenantContext.setTenantIdHex(tenantHex);
             chain.doFilter(req, res);
         } finally {
             TenantContext.clear();

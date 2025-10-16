@@ -1,0 +1,9 @@
+# application-dev.yml
+multitenant:
+  require-api-key: false        
+  strategy: collection-per-tenant
+  base-database: logs_system
+  log-collection: log_events
+  ensure-indexes: true
+  dev:
+    fallback-tenant-id: ""      

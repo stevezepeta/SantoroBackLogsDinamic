@@ -13,7 +13,6 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-  // PathVariable / RequestParam que no convierten (e.g. ObjectId inválido)
   @ExceptionHandler({
       MethodArgumentTypeMismatchException.class,
       ConversionFailedException.class,
@@ -36,14 +35,12 @@ public class GlobalExceptionHandler {
     return Map.of("error", "bad_request", "message", ex.getMessage());
   }
 
-  // JSON mal formado o tipos erróneos en el body
   @ExceptionHandler(HttpMessageNotReadableException.class)
   @ResponseStatus(HttpStatus.BAD_REQUEST)
   public Map<String, Object> handleNotReadable(HttpMessageNotReadableException ex) {
     return Map.of("error", "invalid_json", "message", "Body JSON inválido o tipos incorrectos");
   }
 
-  // Errores de escritura (índices únicos, etc.)
   @ExceptionHandler(MongoWriteException.class)
   @ResponseStatus(HttpStatus.CONFLICT)
   public Map<String, Object> handleMongoWrite(MongoWriteException ex) {

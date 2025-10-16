@@ -16,7 +16,7 @@ public class Environment extends BaseEntity {
 private ObjectId tenantId;
 @Field("system_id")
 private ObjectId systemId;
-private String code; // dev|stg|prod|custom
+private String code; 
 private String name;
-private String status; // active|disabled
+private String status; 
 }

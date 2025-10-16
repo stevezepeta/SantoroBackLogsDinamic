@@ -16,8 +16,8 @@ import org.springframework.data.mongodb.core.mapping.Field;
 public class AlertChannel extends BaseEntity {
 @Field("tenant_id")
 private ObjectId tenantId;
-private String type; // email|slack|webhook
-private Document config; // parámetros del canal
+private String type; 
+private Document config; 
 private String name;
 private String status;
 }
