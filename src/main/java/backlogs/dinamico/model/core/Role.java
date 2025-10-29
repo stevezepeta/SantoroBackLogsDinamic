@@ -2,9 +2,12 @@ package backlogs.dinamico.model.core;
 
 
 import backlogs.dinamico.model.base.BaseEntity;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.*;
+import org.bson.types.ObjectId;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
+import org.springframework.data.mongodb.core.mapping.Field;
 
 
 @Data
@@ -18,7 +21,13 @@ import org.springframework.data.mongodb.core.index.CompoundIndexes;
         @CompoundIndex(name="ix_role_tenant_name", def="{ 'tenant_id':1, 'name':1 }")
 })
 public class Role extends BaseEntity {
+
+    @Field("tenant_id")
+    private ObjectId tenantId;
+
     private String code; // SUPER_ADMIN | TENANT_ADMIN | DEVELOPER | VIEWER
+
     private String name;
+
     private String description;
 }

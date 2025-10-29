@@ -2,110 +2,84 @@ package backlogs.dinamico.controller.core;
 
 import backlogs.dinamico.model.core.User;
 import backlogs.dinamico.service.core.UserService;
+import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
+import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.net.URI;
+import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
-import static org.springframework.http.HttpStatus.CONFLICT;
-import static org.springframework.http.HttpStatus.NOT_FOUND;
-
+@Slf4j
 @RestController
 @RequestMapping("/api/core/users")
 @RequiredArgsConstructor
 @CrossOrigin
 public class UserController {
 
-    private final UserService userService;
+    private final UserService service;
+
+    private ObjectId requireTenant() {
+        var t = TenantContext.getTenantId();
+        if (t == null) throw new ResponseStatusException(BAD_REQUEST, "X-Tenant inválido o ausente");
+        return t;
+    }
 
     @GetMapping
-    public Page<User> List(@RequestHeader("X-Tenant")ObjectId tenantId,
-                           @RequestParam(required = false) String status,
-                           @RequestParam(required = false) String q,
-                           @RequestParam(defaultValue = "0") int page,
-                           @RequestParam(defaultValue = "10") int size) {
-        Pageable pageable = PageRequest.of(page, Math.min(size, 200),
-                Sort.by(Sort.Direction.DESC, "createdAt"));
+    public PageDto<User> list(
+            @RequestParam(defaultValue = "0") Integer page,
+            @RequestParam(defaultValue = "10") Integer size,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String status
+    ) {
+        ObjectId tenantId = requireTenant();
+        Pageable pageable = PageRequest.of(Math.max(page, 0), Math.max(size, 1));
+        log.info("[USERS] GET list q='{}' status='{}' page={} size={} tenant={}",
+                q, status, page, size, tenantId.toHexString());
 
-        return userService.list(tenantId, status, q, pageable);
+        Page<User> p = service.list(tenantId, q, status, pageable);
+        log.info("[USERS] OK page={} size={} total={}", p.getNumber(), p.getSize(), p.getTotalElements());
+        return PageDto.of(p);
     }
 
-    // GET BY ID
     @GetMapping("/{id}")
-    public User get(@RequestHeader("X-Tenant")ObjectId tenantId,
-                    @PathVariable ObjectId id) {
-        User u = userService.get(id);
-        if(u.getTenantId() == null || !u.getTenantId().equals(tenantId)) {
-            throw new ResponseStatusException(NOT_FOUND);
-        }
-
-        return u;
+    public User get(@PathVariable ObjectId id) {
+        return service.get(requireTenant(), id);
     }
 
-    // POST (fuerza el tenantId y valida el email unico por tenant)
     @PostMapping
-    public ResponseEntity<User> create(@RequestHeader("X-Tenant")ObjectId tenantId,
-                                       @RequestBody User body) {
-        // Setea el request de Tenant
-        body.setTenantId(tenantId);
-
-        if(body.getEmail() != null &&
-                userService.findByEmail(tenantId, body.getEmail()).isPresent()) {
-            throw new ResponseStatusException(CONFLICT, "El email ya existe en este tenant");
-        }
-
-        User saved = userService.create(body);
-        return ResponseEntity
-                .created(URI.create("/api/core/users/" + saved.getId().toHexString()))
-                .body(saved);
+    public ResponseEntity<User> create(@RequestBody User body) {
+        User saved = service.create(requireTenant(), body);
+        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
-    // UPDATE
     @PutMapping("/{id}")
-    public User update(@RequestHeader("X-Tenant")ObjectId tenantId,
-                       @RequestBody User body,
-                       @PathVariable ObjectId id) {
-
-        User existing = userService.get(id);
-        if(existing.getTenantId() == null || !existing.getTenantId().equals(tenantId)) {
-            throw new ResponseStatusException(NOT_FOUND);
-        }
-
-        // El tenant no cambia
-        body.setTenantId(existing.getTenantId());
-
-        // Si cambia el email, se valida dentro del Tenant
-        if(body.getEmail() != null &&
-            !body.getEmail().equalsIgnoreCase(existing.getEmail()) &&
-            userService.findByEmail(tenantId, body.getEmail()).isPresent()) {
-            throw new ResponseStatusException(CONFLICT, "El email ya existe en este tenant");
-        }
-
-        return userService.update(id, body);
+    public User update(@PathVariable ObjectId id, @RequestBody User body) {
+        return service.update(requireTenant(), id, body);
     }
 
-    // DELETE
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@RequestHeader("X-Tenant")ObjectId tenantId,
-                       @PathVariable ObjectId id) {
-
-        User existing = userService.get(id);
-        if(existing.getTenantId() == null || !existing.getTenantId().equals(tenantId)) {
-            throw new ResponseStatusException(NOT_FOUND);
-        }
-
-        userService.delete(id);
+    public void delete(@PathVariable ObjectId id) {
+        service.delete(requireTenant(), id);
     }
 
+    @Value
+    public static class PageDto<T> {
+        int page;
+        int size;
+        long total;
+        java.util.List<T> data;
 
-
+        public static <T> PageDto<T> of(Page<T> p) {
+            return new PageDto<>(p.getNumber(), p.getSize(), p.getTotalElements(), p.getContent());
+        }
+    }
 }

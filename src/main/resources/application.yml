@@ -2,7 +2,10 @@ spring:
   data:
     mongodb:
       uri: mongodb://localhost:27017/logs_system
-  data.mongodb.auto-index-creation: true
+      auto-index-creation: true
+  jackson:
+    parser:
+      allow-comments: true
 
 multitenant:
   strategy: collection-per-tenant
@@ -16,3 +19,19 @@ security:
     enabled: false
   catalogs:
     protect-writes: false
+  jwt:
+    secret: "change-me-very-long-secret-key-32-bytes-min-1234567890"
+    issuer: "backlogs"
+    ttl-minutes: 120
+  self-signup:
+    enabled: false
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.web: DEBUG
+
+biometric:
+  dif-fp: ./data/fp
+  dir-face: ./data/face
+  threshold: 25

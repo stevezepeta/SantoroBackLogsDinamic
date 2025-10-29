@@ -7,94 +7,97 @@ import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
 import backlogs.dinamico.repository.core.UserRoleRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.stream.Collectors;
 
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 import static org.springframework.http.HttpStatus.NOT_FOUND;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class UserRoleService {
 
+    private final UserRoleRepository userRoleRepo;
     private final UserRepository userRepo;
     private final RoleRepository roleRepo;
-    private final UserRoleRepository userRoleRepo;
 
-    public void assertUserInTenant(ObjectId tenantId, ObjectId userId) {
-        User u = userRepo.findById(userId)
-                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "Usuario no existe"));
-        if(u.getTenantId() == null || !u.getTenantId().equals(tenantId)) {
-            throw new ResponseStatusException(NOT_FOUND, "Usuario fuera del tenant");
-        }
+    // --- Consultar roles de un usuario ---
+    public List<Role> listRolesOfUser(ObjectId tenantId, ObjectId userId) {
+        ensureUserInTenant(tenantId, userId);
+        var assignments = userRoleRepo.findByTenantIdAndUserId(tenantId, userId);
+        if (assignments.isEmpty()) return List.of();
+
+        var roleIds = assignments.stream().map(UserRole::getRoleId).toList();
+        var roles = roleRepo.findAllById(roleIds);
+
+        return roles.stream()
+                .filter(r -> tenantId.equals(r.getTenantId()))
+                .toList();
     }
 
-    public void requireRoleExist(ObjectId roleId) {
-        if(!roleRepo.existsById(roleId)) {
-            throw new ResponseStatusException(BAD_REQUEST, "Rol invalido");
-        }
-    }
-
-    // Se listan los roles asigandos a un usuario
-    public List<Role> list(ObjectId tenantId, ObjectId userId) {
-        assertUserInTenant(tenantId, userId);
-        var links = userRoleRepo.findByTenantIdAndUserId(tenantId, userId);
-        var roleIds = links.stream().map(UserRole::getRoleId).toList();
-
-        return roleIds.isEmpty() ? List.of() : roleRepo.findAllById(roleIds);
-    }
-
-    // Asigna un rol
+    // --- Agregar un rol ---
     public void add(ObjectId tenantId, ObjectId userId, ObjectId roleId) {
-        assertUserInTenant(tenantId, userId);
-        requireRoleExist(roleId);
-        if(userRoleRepo.existsByTenantIdAndUserIdAndRoleId(tenantId, userId, roleId)) return;
-        userRoleRepo.save(UserRole.builder()
-                .tenantId(tenantId)
-                .userId(userId)
-                .roleId(roleId)
-                .build());
+        var user = ensureUserInTenant(tenantId, userId);
+        var role = ensureRoleInTenant(tenantId, roleId);
+
+        boolean exists = userRoleRepo.existsByTenantIdAndUserIdAndRoleId(tenantId, userId, roleId);
+        if (exists) return;
+
+        var ur = new UserRole();
+        ur.setTenantId(tenantId);
+        ur.setUserId(user.getId());
+        ur.setRoleId(role.getId());
+        ur.setCreatedAt(new Date().toInstant());
+        userRoleRepo.save(ur);
     }
 
-    // Eliminacion de un rol
     public void remove(ObjectId tenantId, ObjectId userId, ObjectId roleId) {
-        assertUserInTenant(tenantId, userId);
+        ensureUserInTenant(tenantId, userId);
+        ensureRoleInTenant(tenantId, roleId);
         userRoleRepo.deleteByTenantIdAndUserIdAndRoleId(tenantId, userId, roleId);
     }
 
-    public void replace(ObjectId tenantId, ObjectId userId, List<ObjectId> newRoleIds) {
-        assertUserInTenant(tenantId, userId);
-
-        // validando la existencia de los roles
-        if(newRoleIds != null && !newRoleIds.isEmpty()) {
-            long count = roleRepo.countByIdIn(tenantId, newRoleIds);
-            if(count != newRoleIds.size()) {
-                throw new ResponseStatusException(BAD_REQUEST, "Algun rol no existe");
-            }
-        }
+    public List<Role> setAll(ObjectId tenantId, ObjectId userId, List<ObjectId> newRoles) {
+        ensureUserInTenant(tenantId, userId);
 
         var current = userRoleRepo.findByTenantIdAndUserId(tenantId, userId);
-        Set<ObjectId> currentSet = new HashSet<>(current.stream().map(UserRole::getRoleId).toList());
-        Set<ObjectId> newSet = new HashSet<>(newRoleIds == null ? List.of() : newRoleIds);
+        var currentSet = current.stream().map(UserRole::getRoleId).collect(Collectors.toSet());
+        var newSet = new HashSet<>(Optional.ofNullable(newRoles).orElse(List.of()));
 
-        // quita los que ya no están
+
         for (ObjectId rid : currentSet) {
             if (!newSet.contains(rid)) {
                 userRoleRepo.deleteByTenantIdAndUserIdAndRoleId(tenantId, userId, rid);
             }
         }
-        // agrega los nuevos
+
+        // agregar los nuevos
         for (ObjectId rid : newSet) {
-            if (!currentSet.contains(rid)) {
-                add(tenantId, userId, rid);
-            }
+            add(tenantId, userId, rid);
         }
+
+        return listRolesOfUser(tenantId, userId);
     }
 
+    private User ensureUserInTenant(ObjectId tenantId, ObjectId userId) {
+        var user = userRepo.findById(userId).orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "user_not_found"));
+        if (!tenantId.equals(user.getTenantId())) {
+            throw new ResponseStatusException(BAD_REQUEST, "user_not_in_tenant");
+        }
+        return user;
+    }
 
+    private Role ensureRoleInTenant(ObjectId tenantId, ObjectId roleId) {
+        var role = roleRepo.findById(roleId).orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "role_not_found"));
+        if (!tenantId.equals(role.getTenantId())) {
+            throw new ResponseStatusException(BAD_REQUEST, "role_not_in_tenant");
+        }
+        return role;
+    }
 }

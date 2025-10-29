@@ -37,9 +37,9 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
   }
 
   @Override
-  protected void doFilterInternal(@NonNull HttpServletRequest req,
-                                  @NonNull HttpServletResponse res,
-                                  @NonNull FilterChain chain)
+  protected void doFilterInternal(HttpServletRequest req,
+                                  HttpServletResponse res,
+                                  FilterChain chain)
           throws ServletException, IOException {
 
     if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {
@@ -48,17 +48,32 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
     }
 
     // 1) Leer headers/params
-    String tenantHex = first(req.getHeader("X-Tenant-Id"),      req.getParameter("tenantId"));
-    String domain    = first(req.getHeader("X-Org-Domain"),     req.getParameter("domain"));
-    String systemHex = first(req.getHeader("X-System-Id"),      req.getParameter("systemId"));
-    String envHex    = first(req.getHeader("X-Environment-Id"), req.getParameter("environmentId"));
+    String tenantHex = coalesce(
+            req.getHeader("X-Tenant"),
+            req.getHeader("X-Tenant-Id"),
+            req.getParameter("tenantId")
+    );
 
-    // 2) Resolver IDs
+    String orgCode = coalesce(
+            req.getHeader("X-Org-Code"),
+            req.getHeader("X-Org-Slug"),
+            req.getHeader("X-Org-Domain"),
+            req.getParameter("org"),
+            req.getParameter("orgCode"),
+            req.getParameter("domain")
+    );
+
+    String systemHex = coalesce(req.getHeader("X-System-Id"),      req.getParameter("systemId"));
+    String envHex    = coalesce(req.getHeader("X-Environment-Id"), req.getParameter("environmentId"));
+
     ObjectId tenantId = null;
     if (isHexObjectId(tenantHex)) {
       tenantId = new ObjectId(tenantHex);
-    } else if (notBlank(domain)) {
-      tenantId = organizationRepository.findByDomainIgnoreCase(domain.trim())
+    } else if (hasText(orgCode)) {
+      String code = orgCode.trim().toLowerCase();
+      tenantId = organizationRepository.findByCodeIgnoreCase(code)
+              .or(() -> organizationRepository.findBySlug(code))
+              .or(() -> organizationRepository.findByDomainIgnoreCase(code))
               .map(org -> org.getId())
               .orElse(null);
     }
@@ -73,18 +88,15 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
     String collectionSuffix = null;
 
     switch (st) {
-      case "database-per-tenant" -> {
-        dbName = (tenantId != null) ? baseDb + "__" + tenantId.toHexString() : baseDb;
-      }
+      case "database-per-tenant" -> dbName = (tenantId != null) ? baseDb + "__" + tenantId.toHexString() : baseDb;
       case "collection-per-tenant" -> {
         dbName = baseDb;
         collectionSuffix = (tenantId != null) ? "__" + tenantId.toHexString() : null;
       }
-      default -> dbName = baseDb; // single/shared
+      default -> dbName = baseDb;
     }
 
     try {
-      // 4) Fijar el contexto por request
       TenantContext.set(TenantContext.Ctx.builder()
               .tenantId(tenantId)
               .systemId(systemId)
@@ -95,21 +107,21 @@ public class TenantHeaderFilter extends OncePerRequestFilter {
 
       chain.doFilter(req, res);
     } finally {
-      // 5) Limpiar SIEMPRE
       TenantContext.clear();
     }
   }
 
   // -------- helpers --------
-  private static String first(String a, String b) {
-    return (a != null && !a.isBlank()) ? a : (b != null && !b.isBlank() ? b : null);
+  private static String coalesce(String... values) {
+    if (values == null) return null;
+    for (String v : values) if (v != null && !v.isBlank()) return v;
+    return null;
   }
-
   private static boolean isHexObjectId(String v) {
     return v != null && v.matches("^[a-fA-F0-9]{24}$");
   }
 
-  private static boolean notBlank(String v) {
+  private static boolean hasText(String v) {
     return v != null && !v.isBlank();
   }
 }
