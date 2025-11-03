@@ -3,38 +3,53 @@ package backlogs.dinamico.model.core;
 
 import backlogs.dinamico.model.base.BaseEntity;
 import lombok.*;
-import lombok.experimental.SuperBuilder;
-import org.bson.Document;
+import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
-import org.springframework.data.mongodb.core.index.Indexed;
+import org.springframework.data.mongodb.core.mapping.Field;
 
 
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-@SuperBuilder
-@org.springframework.data.mongodb.core.mapping.Document(collection = "organizations")
+@Builder
+@Document(collection = "organizations")
 @CompoundIndexes({
-        @CompoundIndex(name = "ix_org_status", def = "{ 'status': 1 }")
+        @CompoundIndex(name = "ux_org_domain", def = "{'domain': 1}", unique = true, sparse = true),
+        @CompoundIndex(name = "ux_org_code",   def = "{'code': 1}",   unique = true, sparse = true),
+        @CompoundIndex(name = "ux_org_slug",   def = "{'slug': 1}",   unique = true, sparse = true)
 })
 public class Organization extends BaseEntity {
 
+    @Field("name")
     private String name;
 
     // Dominio principal
-    @Indexed(name = "ux_org_domain", unique = true, sparse = true)
+    @Field("domain")
     private String domain;
 
-    @Indexed(name = "ux_org_code", unique = true, sparse = true)
+    @Field("code")
     private String code;
 
     // Codigo corto de la empresa
-    @Indexed(name = "ux_org_slug", unique = true, sparse = true)
+    @Field("slug")
     private String slug;
 
+    @Field("status")
     private String status; // active|disabled
 
-    private Document settings; // Retención, zona horaria, límites, etc.
+    @Field("settings")
+    private Settings settings; // Retención, zona horaria, límites, etc.
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    public static class Settings {
+        @Field("timezone")
+        private String timezone;      // p.ej. "Mexico_City"
+        @Field("retentionDays")
+        private Integer retentionDays; // p.ej. 90
+    }
 
 }

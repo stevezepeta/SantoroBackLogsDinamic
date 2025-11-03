@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.*;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -22,26 +23,18 @@ public class RoleService {
 
   private final RoleRepository repo;
 
-  public Page<Role> listSafe(String q, Integer page, Integer size) {
-    String tenantHex = TenantContext.getTenantIdHex();
-    if (!StringUtils.hasText(tenantHex)) {
+  public Page<Role> list(ObjectId tenantId, String q, Pageable pageable) {
+    if (tenantId == null) {
       throw new ResponseStatusException(BAD_REQUEST, "missing_tenant_ctx");
     }
-    ObjectId tenantId = new ObjectId(tenantHex);
-
-    if (page == null || page < 0) page = 0;
-    if (size == null || size <= 0 || size > 200) size = 10;
-    Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "code"));
-
     try {
       if (StringUtils.hasText(q)) {
         return repo.searchByTenantAndCodeOrName(tenantId, q, pageable);
       }
       return repo.findByTenantId(tenantId, pageable);
     } catch (IllegalArgumentException | DataAccessException ex) {
-      log.error("[RoleService] Query failed tenant={} q='{}' page={} size={} -> {}: {}",
-              tenantId.toHexString(), q, page, size, ex.getClass().getSimpleName(), ex.getMessage(), ex);
-
+      log.error("[RoleService] list failed tenant={} q='{}' pageable={} -> {}: {}",
+              tenantId.toHexString(), q, pageable, ex.getClass().getSimpleName(), ex.getMessage(), ex);
       throw new ResponseStatusException(BAD_REQUEST, "invalid_roles_query: " + ex.getMessage(), ex);
     }
   }
@@ -51,19 +44,10 @@ public class RoleService {
     if (!StringUtils.hasText(tenantHex)) {
       throw new ResponseStatusException(BAD_REQUEST, "missing_tenant_ctx");
     }
-    ObjectId tenantId = new ObjectId(tenantHex);
-    try {
-      if (StringUtils.hasText(q)) {
-        return repo.searchByTenantAndCodeOrName(tenantId, q, pageable);
-      }
-      return repo.findByTenantId(tenantId, pageable);
-    } catch (IllegalArgumentException | DataAccessException ex) {
-      log.error("[RoleService] Query failed tenant={} q='{}' pageable={} -> {}: {}",
-              tenantId.toHexString(), q, pageable, ex.getClass().getSimpleName(), ex.getMessage(), ex);
-      throw new ResponseStatusException(BAD_REQUEST, "invalid_roles_query: " + ex.getMessage(), ex);
-    }
+    return list(new ObjectId(tenantHex), q, pageable);
   }
 
+  // -------- GET -----------
   public Role get(ObjectId id) {
     String tenantHex = TenantContext.getTenantIdHex();
     if (!StringUtils.hasText(tenantHex)) {
@@ -71,13 +55,16 @@ public class RoleService {
     }
     ObjectId tenantId = new ObjectId(tenantHex);
 
-    Role r = repo.findById(id).orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "role_not_found"));
+    Role r = repo.findById(id)
+            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "role_not_found"));
+
     if (r.getTenantId() == null || !tenantId.equals(r.getTenantId())) {
       throw new ResponseStatusException(NOT_FOUND, "role_not_found");
     }
     return r;
   }
 
+  // ------- CREATE ----------
   public Role create(Role body) {
     String tenantHex = TenantContext.getTenantIdHex();
     if (!StringUtils.hasText(tenantHex)) {
@@ -91,6 +78,14 @@ public class RoleService {
       throw new ResponseStatusException(BAD_REQUEST, "invalid_tenant_in_payload");
     }
 
+    // Se normaliza code y name
+    if (StringUtils.hasText(body.getCode())) {
+      body.setCode(body.getCode().trim());
+    }
+    if (StringUtils.hasText(body.getName())) {
+      body.setName(body.getName().trim());
+    }
+
     if (StringUtils.hasText(body.getCode())) {
       repo.findByTenantIdAndCode(tenantId, body.getCode()).ifPresent(x -> {
         throw new ResponseStatusException(BAD_REQUEST, "role_code_already_exists");
@@ -100,6 +95,7 @@ public class RoleService {
     return repo.save(body);
   }
 
+  // ------- DELETE --------
   public void delete(ObjectId id) {
     String tenantHex = TenantContext.getTenantIdHex();
     if (!StringUtils.hasText(tenantHex)) {
@@ -107,7 +103,9 @@ public class RoleService {
     }
     ObjectId tenantId = new ObjectId(tenantHex);
 
-    Role existing = repo.findById(id).orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "role_not_found"));
+    Role existing = repo.findById(id)
+            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "role_not_found"));
+
     if (existing.getTenantId() == null || !tenantId.equals(existing.getTenantId())) {
       throw new ResponseStatusException(NOT_FOUND, "role_not_found");
     }

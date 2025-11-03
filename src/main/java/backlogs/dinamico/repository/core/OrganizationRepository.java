@@ -15,12 +15,14 @@ public interface OrganizationRepository extends MongoRepository<Organization, Ob
 
   Optional<Organization> findByCodeIgnoreCase(String code);
 
+  Optional<Organization> findByDomain(String domain);
+  Optional<Organization> findByCode(String code);
   Optional<Organization> findBySlug(String slug);
   Optional<Organization> findByDomainIgnoreCase(String domain);
 
   Optional<Organization> findBySlugIgnoreCase(String slug);
-  boolean existsBySlugIgnoreCase(String slug);
-  boolean existsByIdAndStatus(ObjectId id, String status);
-  Optional<Organization> findByIdAndStatus(ObjectId is, String status);
+
+  Page<Organization> findByNameContainingIgnoreCaseOrDomainContainingIgnoreCaseOrCodeContainingIgnoreCase(
+          String name, String domain, String code, Pageable pageable);
 
 }

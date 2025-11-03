@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -84,6 +85,34 @@ public class JwtTokenService {
                 .setSigningKey(key)
                 .parseClaimsJws(token)
                 .getBody();
+    }
+
+    public String generateInviteJwt(ObjectId tenantId,
+                                    String email,
+                                    List<String> roles,
+                                    String rawToken,
+                                    Instant expiresAt) {
+        Instant now = Instant.now();
+        Instant exp = (expiresAt != null && expiresAt.isAfter(now))
+                ? expiresAt
+                : now.plus(48, ChronoUnit.HOURS);
+
+        // Normalizaciones
+        List<String> safeRoles = (roles == null) ? List.of() : roles;
+
+        return Jwts.builder()
+                .setIssuer(issuer)
+                .setSubject(email)
+                .setIssuedAt(Date.from(exp))
+                .setExpiration(Date.from(exp))
+                .addClaims(Map.of(
+                        "tenant", tenantId == null ? null : tenantId.toHexString(),
+                        "roles", safeRoles,
+                        "tok", rawToken
+                ))
+                .signWith(SignatureAlgorithm.HS256, key)
+                .compact();
+
     }
 
     /** Genera un token de invitación */

@@ -1,5 +1,6 @@
 package backlogs.dinamico.controller.auth;
 
+import backlogs.dinamico.api.ApiResponse;
 import backlogs.dinamico.infra.security.JwtTokenService;
 import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
@@ -18,11 +19,14 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
+import static org.springframework.http.HttpStatus.*;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -87,33 +91,27 @@ public class WebAuthController {
 
     // -------------------- Login --------------------
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<?> login(
+    public ApiResponse<Map<String, Object>> login(
             @RequestBody LoginReq req,
             @RequestHeader(value = "X-Org-Code", required = false) String orgCode,
             @RequestHeader(value = "X-Tenant", required = false) ObjectId tenantHeader) {
 
         // 1) Resuelve tenant desde el ThreadLocal que setea el filtro (TenantHeaderFilter)
         ObjectId tenantId = TenantContext.getTenantId();
-
         if (tenantId == null) tenantId = tenantHeader;
         if (tenantId == null) {
-            return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "missing_tenant"));
+            throw new ResponseStatusException(BAD_REQUEST, "missing_tenant");
         }
 
         String email = req.getEmail().trim().toLowerCase();
+        User u = userRepo.findByTenantIdAndEmailIgnoreCase(tenantId, email)
+                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "bad_credentials"));
 
-        var userOpt = userRepo.findByTenantIdAndEmailIgnoreCase(tenantId, email);
-        if (userOpt.isEmpty()) {
-            return ResponseEntity.status(401).body(Map.of("ok", false, "error", "bad_credentials"));
-        }
-
-        User u = userOpt.get();
         if (!"active".equalsIgnoreCase(u.getStatus())) {
-            return ResponseEntity.status(403).body(Map.of("ok", false, "error", "inactive_user"));
+            throw new ResponseStatusException(FORBIDDEN, "inactive_user");
         }
-
         if (!passwordEncoder.matches(req.getPassword(), u.getPasswordHash())) {
-            return ResponseEntity.status(401).body(Map.of("ok", false, "error", "bad_credentials"));
+            throw new ResponseStatusException(UNAUTHORIZED, "bad_credentials");
         }
 
         List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, u.getId())
@@ -124,12 +122,30 @@ public class WebAuthController {
 
         String jwt = tokens.generate(u, roles, tenantId);
 
-        return ResponseEntity.ok(Map.of(
-                "ok", true,
-                "user", Map.of("id", u.getId(), "email", u.getEmail(), "name", u.getName()),
+        Map<String, Object> data = Map.of(
+                "organization", orgBlock(tenantId),
+                "user", Map.of(
+                        "id", u.getId().toHexString(),
+                        "email", u.getEmail(),
+                        "name", u.getName()
+                ),
                 "roles", roles.stream().map(Role::getCode).toList(),
                 "token", jwt
-        ));
+        );
+
+        return ApiResponse.ok("Login exitoso", null, data);
+    }
+
+    private Map<String, Object> orgBlock(ObjectId tenantId) {
+        return orgRepo.findById(tenantId)
+                .<Map<String, Object>>map(o -> Map.of(
+                        "id",   o.getId().toHexString(),
+                        "name", o.getName()
+                ))
+                .orElseGet(() -> Map.of(
+                        "id",   tenantId.toHexString(),
+                        "name", "(unknown)"
+                ));
     }
 
 

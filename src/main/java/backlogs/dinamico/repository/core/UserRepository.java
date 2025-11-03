@@ -26,6 +26,5 @@ public interface UserRepository extends MongoRepository<User, ObjectId> {
 
     long countByTenantId(ObjectId tenantId);
 
-    List<User> findAllByEmailIgnoreCase(String email);
 
 }

@@ -8,8 +8,10 @@ import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.*;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -26,20 +28,32 @@ public class RoleController {
   @GetMapping
   public ResponseEntity<?> list(
           @RequestParam(name = "q", required = false) String q,
-          @RequestParam(name = "page", defaultValue = "0") Integer page,
+          @RequestParam(name = "page", defaultValue = "1") Integer page,
           @RequestParam(name = "size", defaultValue = "10") Integer size
   ) {
     try {
+
+      ObjectId tenantId = TenantContext.getTenantId();
+      if (tenantId == null) {
+        log.warn("[ROLES] tenantId ausente en TenantContext");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(new Err("tenant_missing", "X-Tenant invalido o ausente"));
+      }
+
       // Logs de entrada
       log.info("[ROLES] GET list q='{}' page={} size={} tenant={}",
               q, page, size, TenantContext.getTenantIdHex());
 
-      if (page == null || page < 0) page = 0;
-      if (size == null || size <= 0 || size > 200) size = 10;
+      // Se normalizan los limites
+      int clientPage = (page == null || page < 1) ? 1 : page;
+      int pageSize   = (size == null || size <= 0 || size > 200) ? 10 : size;
 
-      Page<Role> pageData = service.listSafe(q, page, size);
+      int pageIndex = clientPage - 1;
+      Pageable pageable = PageRequest.of(pageIndex, pageSize, Sort.by(Sort.Order.asc("code")));
 
-      var dtoList = pageData.getContent().stream()
+      Page<Role> result = service.list(tenantId, q, pageable);
+
+      List<RoleDto> items = result.getContent().stream()
               .map(r -> new RoleDto(
                       r.getId() != null ? r.getId().toHexString() : null,
                       r.getCode(),
@@ -47,7 +61,12 @@ public class RoleController {
               ))
               .toList();
 
-      var body = new PageDto<>(pageData.getNumber(), pageData.getSize(), pageData.getTotalElements(), dtoList);
+      PageDto<RoleDto> body = new PageDto<>(
+              pageIndex + 1,
+              pageSize,
+              result.getTotalElements(),
+              items
+      );
 
       log.info("[ROLES] OK page={} size={} total={}", body.page, body.size, body.total);
       return ResponseEntity.ok(body);
