@@ -2,11 +2,13 @@ package backlogs.dinamico.config;
 
 import backlogs.dinamico.infra.security.ApiKeyTenantFilter;
 import backlogs.dinamico.infra.security.JwtAuthFilter;
+import backlogs.dinamico.security.JsonAuthEntryPoint;
 import backlogs.dinamico.tenant.TenantResolutionFilter;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -42,6 +44,9 @@ public class SecurityConfig {
     private final JwtAuthFilter jwtAuthFilter;
     private final TenantResolutionFilter tenantResolutionFilter;
 
+    @Autowired
+    JsonAuthEntryPoint jsonAuthEntryPoint;
+
     @PostConstruct
     void logFlags() {
         log.info("Security flags -> requireApiKey={}, basicEnabled={}, protectCatalogWrites={}",
@@ -55,15 +60,19 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> {
+
                     // ==== Rutas públicas ====
                     auth.requestMatchers("/error", "/actuator/**").permitAll();
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
+
+                    auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
                     auth.requestMatchers("/api/ingest/**").permitAll();
 
                     // Catálogos públicos en GET (si quieres protegerlos, cambia a .authenticated())
                     auth.requestMatchers(HttpMethod.GET, "/api/catalogs/**").permitAll();
 
                     // Auth público (web)
+                    auth.requestMatchers(HttpMethod.POST, "/api/auth/**").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/accept-invite").permitAll();
 
@@ -88,7 +97,10 @@ public class SecurityConfig {
                     auth.requestMatchers(HttpMethod.PUT,    "/api/core/users/*/roles**").hasAnyRole("ADMIN", "TENANT_OWNER");
 
                     auth.anyRequest().authenticated();
-                });
+                })
+                .exceptionHandling(ex -> ex
+                        .authenticationEntryPoint(jsonAuthEntryPoint)
+                );
 
         // ====== ORDEN DE FILTROS ======
 

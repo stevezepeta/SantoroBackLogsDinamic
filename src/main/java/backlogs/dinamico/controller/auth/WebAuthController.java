@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -105,13 +106,13 @@ public class WebAuthController {
 
         String email = req.getEmail().trim().toLowerCase();
         User u = userRepo.findByTenantIdAndEmailIgnoreCase(tenantId, email)
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "bad_credentials"));
+                .orElseThrow(() -> new BadCredentialsException("bad"));
 
         if (!"active".equalsIgnoreCase(u.getStatus())) {
             throw new ResponseStatusException(FORBIDDEN, "inactive_user");
         }
         if (!passwordEncoder.matches(req.getPassword(), u.getPasswordHash())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "bad_credentials");
+            throw new BadCredentialsException("bad");
         }
 
         List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, u.getId())

@@ -1,41 +1,109 @@
 package backlogs.dinamico.controller.logs;
 
-import backlogs.dinamico.service.ingest.LogQueryService;
+import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.service.logs.LogQueryService;
+import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
-import org.bson.Document;
 import org.bson.types.ObjectId;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
-import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/logs")
 @RequiredArgsConstructor
-@CrossOrigin
 public class LogQueryController {
 
   private final LogQueryService service;
 
+  private static void putIfText(Map<String, String> m, String key, String value) {
+    if (value != null && !value.isBlank()) m.put(key, value);
+  }
+
   @GetMapping
-  public Page<Document> search(
-      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
-      @RequestParam(required = false) String severity,
-      @RequestParam(required = false) String eventTypeCode,
-      @RequestParam(required = false) String q,
-      @RequestParam(required = false) String traceId,
-      @RequestParam(required = false) String sessionId,
-      @RequestParam(required = false) String deviceId,
-      Pageable pageable
+  public ResponseEntity<ApiResponse<Map<String, Object>>> list(
+          @RequestParam(required = false) String q,
+          @RequestParam(required = false) String level,
+          @RequestParam(required = false) String processType,
+          @RequestParam(required = false) String device,
+          @RequestParam(required = false) String scanDevice,
+          @RequestParam(required = false) String scanType,
+          @RequestParam(required = false) String officeId,
+          @RequestParam(required = false) String personId,
+          @RequestParam(required = false) String baseCode,
+          @RequestParam(required = false) String errorCode,
+          @RequestParam(required = false) String sessionToken,
+          @RequestParam(required = false) String system,
+          @RequestParam(required = false) String environment,
+          @RequestParam(required = false) Instant from,
+          @RequestParam(required = false) Instant to,
+          @RequestParam(defaultValue = "1") int page,
+          @RequestParam(defaultValue = "20") int size,
+          @RequestParam(defaultValue = "timestamp") String sort,
+          @RequestParam(defaultValue = "desc") String order
   ) {
-    return service.search(from, to, severity, eventTypeCode, q, traceId, sessionId, deviceId, pageable);
+
+    ObjectId tenantId = TenantContext.getTenantId();
+
+    var filters = new java.util.HashMap<String, String>();
+    put(filters, "q", q);
+    put(filters, "level", level);
+    put(filters, "processType", processType);
+    put(filters, "device", device);
+    put(filters, "scanDevice", scanDevice);
+    put(filters, "scanType", scanType);
+    put(filters, "officeId", officeId);
+    put(filters, "personId", personId);
+    put(filters, "baseCode", baseCode);
+    put(filters, "errorCode", errorCode);
+    put(filters, "sessionToken", sessionToken);
+    put(filters, "system", system);
+    put(filters, "environment", environment);
+
+    var result = service.list(tenantId, filters, from, to, page, size, sort, order);
+    return ResponseEntity.ok(ApiResponse.ok("Logs", "/api/logs", result));
+
   }
 
   @GetMapping("/{id}")
-  public Document getOne(@PathVariable ObjectId id) {
-    return service.getById(id);
+  public ResponseEntity<ApiResponse<Map<String, Object>>> get(@PathVariable ObjectId id) {
+    ObjectId tenantId = TenantContext.getTenantId();
+    var doc = service.getOne(tenantId, id);
+    return ResponseEntity.ok(ApiResponse.ok("Detalle del log", "/api/logs/"+id, doc));
   }
+
+  @GetMapping("/stats/summary")
+  public ResponseEntity<ApiResponse<Map<String, Object>>> summary(
+          @RequestParam(required = false) Instant from,
+          @RequestParam(required = false) Instant to
+  ) {
+    ObjectId tenantId = TenantContext.getTenantId();
+    var data = service.summary(tenantId, from, to);
+    return ResponseEntity.ok(ApiResponse.ok("Resumen", "/api/logs/stats/summary", data));
+  }
+
+  // TIMELINE
+  @GetMapping("/stats/timeline")
+  public ResponseEntity<ApiResponse<Map<String, Object>>> timeline(
+          @RequestParam(required = false) Instant from,
+          @RequestParam(required = false) Instant to,
+          @RequestParam(defaultValue = "hours") String bucket,
+          @RequestParam(required = false) String level
+  ) {
+
+    ObjectId tenantId = TenantContext.getTenantId();
+    var data = service.timeline(tenantId, from, to, bucket, level);
+    return ResponseEntity.ok(ApiResponse.ok("Serie de tiempo", "/api/logs/stats/timeline", data));
+
+  }
+
+
+  private static void put(java.util.Map<String,String> m, String k, String v) {
+    if (v != null && !v.isBlank()) m.put(k, v);
+  }
+
 }
