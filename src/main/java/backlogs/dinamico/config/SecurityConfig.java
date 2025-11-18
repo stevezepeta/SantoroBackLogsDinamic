@@ -65,10 +65,11 @@ public class SecurityConfig {
                     auth.requestMatchers("/error", "/actuator/**").permitAll();
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
 
+                    // Ingest y Biometria abiertos
                     auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
                     auth.requestMatchers("/api/ingest/**").permitAll();
 
-                    // Catálogos públicos en GET (si quieres protegerlos, cambia a .authenticated())
+                    // Catálogos públicos
                     auth.requestMatchers(HttpMethod.GET, "/api/catalogs/**").permitAll();
 
                     // Auth público (web)
@@ -78,6 +79,9 @@ public class SecurityConfig {
 
                     // Crear PRIMER admin del tenant (sin token)
                     auth.requestMatchers(HttpMethod.POST, "/api/core/bootstrap-admin").permitAll();
+
+                    // Permite crear organization sin token ni X-Tenant
+                    auth.requestMatchers(HttpMethod.POST, "/api/catalogs/organizations").permitAll();
 
                     // ==== Reglas condicionales (antes de anyRequest) ====
                     if (protectCatalogWrites) {

@@ -49,12 +49,19 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   @Value("${multitenant.header.tenant:X-Tenant}")
   private String tenantHeaderName;
 
+  @Value("${backlogs.allow-public-create-organization:true}")
+  private boolean allowPublicCreateOrg;
+
   // Rutas que NO deben pasar por este filtro
   private static final List<RequestMatcher> EXCLUDED = List.of(
           new AntPathRequestMatcher("/error"),
           new AntPathRequestMatcher("/actuator/**"),
           new AntPathRequestMatcher("/api/auth/**")
   );
+
+  // Bypass explicito para crear organizations SIN API-KEY
+  private static final RequestMatcher CREATE_ORG_POST =
+          new AntPathRequestMatcher("/api/catalogs/organizations", "POST");
 
   @PostConstruct
   void onInit() {
@@ -64,7 +71,16 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   @Override
   protected boolean shouldNotFilter(HttpServletRequest request) {
     if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
-    for (RequestMatcher m : EXCLUDED) if (m.matches(request)) return true;
+
+    for (RequestMatcher m : EXCLUDED) {
+      if (m.matches(request)) return true;
+    }
+
+    // Permite siempre crear organizaciones sin Api-Key
+    if (allowPublicCreateOrg && CREATE_ORG_POST.matches(request)) {
+      return true;
+    }
+
     return false; // filtra el resto
   }
 
@@ -72,13 +88,13 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
           throws ServletException, IOException {
 
+    final String path = req.getRequestURI();
+
     log.info("[ApiKeyTenantFilter] path={}, tenantCtx={}, auth={}, xTenant={}",
             req.getRequestURI(),
             TenantContext.getTenantIdHex(),
             req.getHeader("Authorization") != null ? "Bearer..." : "null",
             req.getHeader(tenantHeaderName));
-
-    final String path = req.getRequestURI();
 
     // 1) Si ya hay tenant resuelto (por JWT u otro filtro), sigue
     if (TenantContext.getTenantId() != null) {
@@ -122,7 +138,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
         // fijar contexto desde la API key
         TenantContext.set(TenantContext.Ctx.builder()
                 .tenantId(key.getTenantId())
-                .systemId(key.getSystemId())                 // *_Id (ObjectId)
+                .systemId(key.getSystemId())
                 .environmentId(key.getEnvironmentId())
                 .build());
 
@@ -155,7 +171,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     }
 
     log.warn("[ApiKeyTenantFilter] missing_tenant -> path={}, authHeader={}, xTenant={}, tenantCtxNow={}",
-            req.getRequestURI(),
+            path,
             req.getHeader("Authorization") != null ? "present" : "absent",
             tenantHex,
             TenantContext.getTenantIdHex());

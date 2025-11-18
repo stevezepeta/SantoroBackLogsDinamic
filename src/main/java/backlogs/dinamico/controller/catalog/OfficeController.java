@@ -1,42 +1,52 @@
 package backlogs.dinamico.controller.catalog;
 
-import backlogs.dinamico.model.catalog.Office;
+import backlogs.dinamico.api.dto.OfficeCreatedRequest;
+import backlogs.dinamico.api.dto.OfficeResponse;
+import backlogs.dinamico.api.dto.OfficeUpdateRequest;
 import backlogs.dinamico.service.catalog.OfficeService;
 import lombok.RequiredArgsConstructor;
-import org.bson.types.ObjectId;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/catalogs/offices")
 @RequiredArgsConstructor
 @CrossOrigin
 public class OfficeController {
+
   private final OfficeService service;
 
+  /** GET -> devuelve el ARREGLO con la estructura pedida */
   @GetMapping
-  public Page<Office> list(@RequestParam ObjectId tenantId,
-                           @RequestParam(required = false) String city,
-                           @RequestParam(required = false) String status,
-                           Pageable pageable) {
-    return service.list(tenantId, city, status, pageable);
+  public List<OfficeResponse> listAll() {
+    return service.listAllForOrg();
   }
 
+  /** GET por id numérico (seq) */
   @GetMapping("/{id}")
-  public Office get(@PathVariable ObjectId id) {
-    return service.get(id);
+  public OfficeResponse get(@PathVariable("id") Long id) {
+    return service.getBySeq(id);
   }
 
+  /** POST -> recibe solo los campos solicitados */
   @PostMapping
-  public ResponseEntity<Office> create(@RequestBody Office body) {
-    return ResponseEntity.status(HttpStatus.CREATED).body(service.create(body));
+  public ResponseEntity<OfficeResponse> create(@RequestBody OfficeCreatedRequest body) {
+    var created = service.create(body);
+    return ResponseEntity.status(HttpStatus.CREATED).body(created);
+  }
+
+  /** PATCH/PUT -> actualiza por id numérico */
+  @PatchMapping("/{id}")
+  public OfficeResponse update(@PathVariable("id") Long id, @RequestBody OfficeUpdateRequest patch) {
+    return service.updateBySeq(id, patch);
   }
 
   @DeleteMapping("/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void delete(@PathVariable ObjectId id) {
-    service.delete(id);
+  public void delete(@PathVariable("id") Long id) {
+    service.deleteBySeq(id);
   }
+
 }
