@@ -1,6 +1,7 @@
 package backlogs.dinamico.infra.security;
 
-import backlogs.dinamico.repository.catalog.ApiKeyRepository;
+import backlogs.dinamico.model.ingest.ApiKey;
+import backlogs.dinamico.repository.catalog.ApiKeyRep;
 import backlogs.dinamico.tenant.TenantContext;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.FilterChain;
@@ -23,8 +24,12 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
+
+import static backlogs.dinamico.security.KeyHasher.sha256b64;
 
 @Slf4j
 @Component
@@ -33,7 +38,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
-  private final ApiKeyRepository apiKeyRepo;
+  private final ApiKeyRep apiKeyRepo;
 
   @Value("${multitenant.strategy:collection-per-tenant}") // single | collection-per-tenant | database-per-tenant
   private String strategy;
@@ -44,12 +49,19 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   @Value("${multitenant.header.tenant:X-Tenant}")
   private String tenantHeaderName;
 
+  @Value("${backlogs.allow-public-create-organization:true}")
+  private boolean allowPublicCreateOrg;
+
   // Rutas que NO deben pasar por este filtro
   private static final List<RequestMatcher> EXCLUDED = List.of(
           new AntPathRequestMatcher("/error"),
           new AntPathRequestMatcher("/actuator/**"),
           new AntPathRequestMatcher("/api/auth/**")
   );
+
+  // Bypass explicito para crear organizations SIN API-KEY
+  private static final RequestMatcher CREATE_ORG_POST =
+          new AntPathRequestMatcher("/api/catalogs/organizations", "POST");
 
   @PostConstruct
   void onInit() {
@@ -59,7 +71,16 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   @Override
   protected boolean shouldNotFilter(HttpServletRequest request) {
     if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
-    for (RequestMatcher m : EXCLUDED) if (m.matches(request)) return true;
+
+    for (RequestMatcher m : EXCLUDED) {
+      if (m.matches(request)) return true;
+    }
+
+    // Permite siempre crear organizaciones sin Api-Key
+    if (allowPublicCreateOrg && CREATE_ORG_POST.matches(request)) {
+      return true;
+    }
+
     return false; // filtra el resto
   }
 
@@ -67,54 +88,67 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
           throws ServletException, IOException {
 
+    final String path = req.getRequestURI();
+
     log.info("[ApiKeyTenantFilter] path={}, tenantCtx={}, auth={}, xTenant={}",
             req.getRequestURI(),
             TenantContext.getTenantIdHex(),
             req.getHeader("Authorization") != null ? "Bearer..." : "null",
             req.getHeader(tenantHeaderName));
 
-    final String path = req.getRequestURI();
-
-    // 1) Si YA hay tenant resuelto
+    // 1) Si ya hay tenant resuelto (por JWT u otro filtro), sigue
     if (TenantContext.getTenantId() != null) {
       chain.doFilter(req, res);
       return;
     }
 
     // 2) Ingesta por API-KEY
-    if (path != null && path.startsWith("/api/ingest/")) {
-      String apiKey = req.getHeader("X-API-Key");
-      if (apiKey == null || apiKey.isBlank()) {
-        unauthorized(res, "Missing X-API-Key");
+    if (path != null && (
+            path.startsWith("/api/ingest/") ||
+            path.startsWith("/api/fingerprint")
+
+    )) {
+
+      // Aceptar ambas variantes del header
+      String apiKeyPlain = firstNonBlank(req.getHeader("X-Api-Key"), req.getHeader("X-API-Key"));
+      if (apiKeyPlain == null) {
+        unauthorized(res, "Missing X-Api-Key");
         return;
       }
 
-      var opt = apiKeyRepo.findByKeyAndStatus(apiKey, "active");
+      // buscar por HASH + status
+      String hash = sha256b64(apiKeyPlain);
+      var opt = apiKeyRepo.findByKeyHashAndStatus(hash, "active");
       if (opt.isEmpty()) { unauthorized(res, "Invalid API key"); return; }
 
-      var key = opt.get();
-      if (key.getRotatesAt() != null && Instant.now().isAfter(key.getRotatesAt())) {
+      ApiKey key = opt.get();
+
+      // expiración / rotación
+      var now = Instant.now();
+      if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
         unauthorized(res, "API key expired");
+        return;
+      }
+      if (key.getRotatesAt() != null && now.isAfter(key.getRotatesAt())) {
+        unauthorized(res, "API key requires rotation");
         return;
       }
 
       try {
-        // Fijar contexto desde la API key
+        // fijar contexto desde la API key
         TenantContext.set(TenantContext.Ctx.builder()
                 .tenantId(key.getTenantId())
                 .systemId(key.getSystemId())
                 .environmentId(key.getEnvironmentId())
                 .build());
 
-        // Particionado cuando resolvemos por API key
+        // particionado por tenant
         switch (strategy.toLowerCase()) {
           case "database-per-tenant" ->
                   TenantContext.setDbName(baseDb + "__" + key.getTenantId().toHexString());
           case "collection-per-tenant" ->
                   TenantContext.setCollectionSuffix("__" + key.getTenantId().toHexString());
-          default -> {
-            // "single": sin cambios
-          }
+          default -> { /* single: sin cambios */ }
         }
 
         chain.doFilter(req, res);
@@ -124,7 +158,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       return;
     }
 
-    // 3) Fallback: aceptar X-Tenant
+    // 3) Fallback: aceptar X-Tenant (hex) si lo envían directamente
     String tenantHex = req.getHeader(tenantHeaderName);
     if (tenantHex != null && ObjectId.isValid(tenantHex)) {
       try {
@@ -137,12 +171,28 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     }
 
     log.warn("[ApiKeyTenantFilter] missing_tenant -> path={}, authHeader={}, xTenant={}, tenantCtxNow={}",
-            req.getRequestURI(),
+            path,
             req.getHeader("Authorization") != null ? "present" : "absent",
             tenantHex,
             TenantContext.getTenantIdHex());
 
     badRequest(res, "missing_tenant");
+
+  }
+
+  // ----------- Helper ----------------
+  private static String firstNonBlank(String a, String b) {
+    if (a != null && !a.isBlank()) return a;
+    if (b != null && !b.isBlank()) return b;
+
+    return null;
+  }
+
+  private static String sha256b64(String s) {
+    try {
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      return Base64.getEncoder().encodeToString(md.digest(s.getBytes(StandardCharsets.UTF_8)));
+    } catch (Exception e) { throw new RuntimeException(e); }
   }
 
   private void unauthorized(HttpServletResponse res, String msg) throws IOException {

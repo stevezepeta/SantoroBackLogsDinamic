@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -91,27 +92,30 @@ public class WebAuthController {
 
     // -------------------- Login --------------------
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResponse<Map<String, Object>> login(
-            @RequestBody LoginReq req,
-            @RequestHeader(value = "X-Org-Code", required = false) String orgCode,
-            @RequestHeader(value = "X-Tenant", required = false) ObjectId tenantHeader) {
+    public ApiResponse<Map<String, Object>> login(@RequestBody LoginReq req) {
 
-        // 1) Resuelve tenant desde el ThreadLocal que setea el filtro (TenantHeaderFilter)
-        ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) tenantId = tenantHeader;
-        if (tenantId == null) {
-            throw new ResponseStatusException(BAD_REQUEST, "missing_tenant");
+        if (req == null ||
+                !StringUtils.hasText(req.getEmail()) ||
+                !StringUtils.hasText(req.getPassword())) {
+
+            throw new ResponseStatusException(BAD_REQUEST, "El email y password es requerido");
         }
 
         String email = req.getEmail().trim().toLowerCase();
-        User u = userRepo.findByTenantIdAndEmailIgnoreCase(tenantId, email)
-                .orElseThrow(() -> new ResponseStatusException(UNAUTHORIZED, "bad_credentials"));
+
+        User u = userRepo.findByEmailIgnoreCase(email)
+                .orElseThrow(() -> new BadCredentialsException("bad"));
 
         if (!"active".equalsIgnoreCase(u.getStatus())) {
             throw new ResponseStatusException(FORBIDDEN, "inactive_user");
         }
         if (!passwordEncoder.matches(req.getPassword(), u.getPasswordHash())) {
-            throw new ResponseStatusException(UNAUTHORIZED, "bad_credentials");
+            throw new BadCredentialsException("bad");
+        }
+
+        ObjectId tenantId = u.getTenantId();
+        if (tenantId == null) {
+            throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "user_without_tenant");
         }
 
         List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, u.getId())

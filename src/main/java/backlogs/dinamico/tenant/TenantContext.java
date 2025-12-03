@@ -17,6 +17,7 @@ public final class TenantContext {
     public static class Ctx {
         // --- mínimos / multitenant ---
         private ObjectId tenantId;
+        private ObjectId organizationId;
 
         // --- opcionales (enriquecidos) ---
         private ObjectId userId;
@@ -30,20 +31,29 @@ public final class TenantContext {
         private String   dbName;
         private String   collectionSuffix;
 
-        /** ctor por defecto -> útil para withInitial y builder */
         public Ctx() {}
-
-        /** ctor mínimo por comodidad */
         public Ctx(ObjectId tenantId) { this.tenantId = tenantId; }
 
-        /**
-         * SHIM: ctor completo para compatibilidad con llamadas antiguas.
-         * Puedes marcarlo como @Deprecated y borrarlo cuando refactors terminen.
-         */
         @Deprecated
         public Ctx(ObjectId tenantId, ObjectId userId, ObjectId personId, String email, String name,
                    ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
             this.tenantId = tenantId;
+            this.userId = userId;
+            this.personId = personId;
+            this.email = email;
+            this.name = name;
+            this.systemId = systemId;
+            this.environmentId = environmentId;
+            this.dbName = dbName;
+            this.collectionSuffix = collectionSuffix;
+            this.organizationId = null;
+        }
+
+        @Deprecated
+        public Ctx(ObjectId tenantId, ObjectId organizationId, ObjectId userId, ObjectId personId, String email, String name,
+                   ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
+            this.tenantId = tenantId;
+            this.organizationId = organizationId;
             this.userId = userId;
             this.personId = personId;
             this.email = email;
@@ -62,32 +72,13 @@ public final class TenantContext {
     public static void set(Ctx ctx) {
         CURRENT.set(ctx != null ? ctx : new Ctx());
     }
-
-    /** Conveniencia: sólo tenant. */
     public static void set(ObjectId tenantId) {
         CURRENT.set(new Ctx(tenantId));
-    }
-
-    /** Conveniencia: "completo" usando builder (evita ctors largos). */
-    public static void set(ObjectId tenantId, ObjectId userId, ObjectId personId, String email, String name,
-                           ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
-        CURRENT.set(Ctx.builder()
-                .tenantId(tenantId)
-                .userId(userId)
-                .personId(personId)
-                .email(email)
-                .name(name)
-                .systemId(systemId)
-                .environmentId(environmentId)
-                .dbName(dbName)
-                .collectionSuffix(collectionSuffix)
-                .build());
     }
 
     public static Ctx get() {
         return CURRENT.get();
     }
-
     public static void clear() {
         CURRENT.remove();
     }
@@ -103,45 +94,63 @@ public final class TenantContext {
 
     // tenantId como hex
     public static void setTenantIdHex(String hex) {
-        if (hex != null && ObjectId.isValid(hex)) {
-            setTenantId(new ObjectId(hex));
-        }
+        if (hex != null && ObjectId.isValid(hex)) setTenantId(new ObjectId(hex));
     }
-
     public static String getTenantIdHex() {
         ObjectId id = getTenantId();
+        return (id != null) ? id.toHexString() : null;
+    }
+
+    // ------- OrganizationId Helpers ------
+    public static void setOrganizationId(ObjectId id) { CURRENT.get().setOrganizationId(id); }
+    public static ObjectId getOrganizationId() { return CURRENT.get().getOrganizationId(); }
+    public static void setOrganizationIdHex(String hex) {
+        if (hex != null && ObjectId.isValid(hex)) setOrganizationId(new ObjectId(hex));
+    }
+
+    public static String getOrganizationIdHex() {
+        ObjectId id = getOrganizationId();
         return (id != null) ? id.toHexString() : null;
     }
 
     public static void setSystemId(ObjectId id) {
         CURRENT.get().setSystemId(id);
     }
-
     public static ObjectId getSystemId() {
         return CURRENT.get().getSystemId();
     }
-
     public static void setEnvironmentId(ObjectId id) {
         CURRENT.get().setEnvironmentId(id);
     }
-
     public static ObjectId getEnvironmentId() {
         return CURRENT.get().getEnvironmentId();
     }
-
     public static void setDbName(String db) {
         CURRENT.get().setDbName(db);
     }
-
     public static String getDbName() {
         return CURRENT.get().getDbName();
     }
-
     public static void setCollectionSuffix(String s) {
         CURRENT.get().setCollectionSuffix(s);
     }
-
     public static String getCollectionSuffix() {
         return CURRENT.get().getCollectionSuffix();
+    }
+
+    public static void set(ObjectId tenantId, ObjectId organizationId, ObjectId userId, ObjectId personId, String email, String name,
+                           ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
+        CURRENT.set(Ctx.builder()
+                .tenantId(tenantId)
+                .organizationId(organizationId)
+                .userId(userId)
+                .personId(personId)
+                .email(email)
+                .name(name)
+                .systemId(systemId)
+                .environmentId(environmentId)
+                .dbName(dbName)
+                .collectionSuffix(collectionSuffix)
+                .build());
     }
 }

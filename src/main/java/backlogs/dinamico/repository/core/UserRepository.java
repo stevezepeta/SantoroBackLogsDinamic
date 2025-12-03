@@ -14,6 +14,8 @@ public interface UserRepository extends MongoRepository<User, ObjectId> {
     Optional<User> findByTenantIdAndEmailIgnoreCase(ObjectId tenantId, String email);
     boolean existsByTenantIdAndEmailIgnoreCase(ObjectId tenantId, String email);
 
+    Optional<User> findByEmailIgnoreCase(String email);
+
     Page<User> findByTenantId(ObjectId tenantId, Pageable pageable);
     Page<User> findByTenantIdAndStatus(ObjectId tenantId, String status, Pageable pageable);
 

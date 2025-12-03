@@ -1,4 +1,4 @@
-package backlogs.dinamico.api.ingest.dto;
+package backlogs.dinamico.api.ingest;
 
 import lombok.Data;
 import org.bson.Document;

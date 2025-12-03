@@ -10,7 +10,9 @@ import backlogs.dinamico.repository.core.UserInviteRepository;
 import backlogs.dinamico.repository.core.UserRepository;
 import backlogs.dinamico.repository.core.UserRoleRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class InviteServices {
@@ -33,6 +36,9 @@ public class InviteServices {
     private final UserRoleRepository userRoles;
     private final PasswordEncoder encoder;
     private final JwtTokenService tokens;
+
+    @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
+    private String frontendBaseUrl;
 
     // Se esta creando una invitacion PENDING
     public UserInvite create(ObjectId tenantId,
@@ -74,7 +80,23 @@ public class InviteServices {
                 .updateAt(now)
                 .build();
 
-        return invites.save(inv);
+        UserInvite saved = invites.save(inv);
+
+        // Construir y loguearnos
+        String inviteLink = buildInviteLink(saved);
+        log.info("[INVITE] Invitación creada para email={} tenant={} token={} link={}",
+                emailCi, tenantId.toHexString(), token, inviteLink);
+
+        return saved;
+    }
+
+    // Se contruye el link completo
+    public String buildInviteLink(UserInvite invite) {
+        if (invite == null || !StringUtils.hasText(invite.getToken())) {
+            return null;
+        }
+
+        return frontendBaseUrl + "/accept-invite?token=" + invite.getToken();
     }
 
     // Acepta invitacion pendiente

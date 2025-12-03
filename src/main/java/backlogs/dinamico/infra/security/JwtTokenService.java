@@ -36,6 +36,8 @@ public class JwtTokenService {
     @Value("${security.jwt.ttl-minutes:120}")
     private long ttlMinutes;
 
+    private ObjectId organizationId;
+
     private Key key;
 
     @PostConstruct
