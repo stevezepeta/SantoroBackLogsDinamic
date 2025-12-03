@@ -34,7 +34,7 @@ public class PasswordResetService {
     private final PasswordResetTokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
 
-    @Value("${app.frontend.base-url:http://localhost:5173}")
+    @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
     private String frontendBaseUrl;
 
     @Value("${app.password-reset.ttl-minutes:30}")

@@ -27,7 +27,6 @@ import java.util.Map;
 public class AdminInviteController {
 
     private final InviteServices invites;
-    private final JwtTokenService tokens;
     private final OrganizationRepository orgRepo;
 
     public record InviteReq(String email, List<String> roles, Long ttlHours) {
@@ -59,11 +58,15 @@ public class AdminInviteController {
                    "name", "(unknown)"
                 ));
 
+        // Link para que el usuario acepte la invitación (front)
+        String inviteLink = invites.buildInviteLink(inv);
+
         Map<String, Object> data = Map.of(
                 "organization", orgBlock,
                 "email",        inv.getEmail(),
                 "roles",        inv.getRoles(),
                 "inviteToken",  inv.getToken(),   // <- este pegas en /api/auth/accept-invite
+                    "inviteLink",   inviteLink,
                 "expiresAt",    inv.getExpiresAt()
         );
 

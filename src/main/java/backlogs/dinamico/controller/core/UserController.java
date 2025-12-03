@@ -1,6 +1,8 @@
 package backlogs.dinamico.controller.core;
 
+import backlogs.dinamico.api.ApiResponse;
 import backlogs.dinamico.model.core.User;
+import backlogs.dinamico.service.core.UserRoleService;
 import backlogs.dinamico.service.core.UserService;
 import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
@@ -15,6 +17,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.Instant;
+import java.util.List;
+
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 @Slf4j
@@ -25,6 +30,7 @@ import static org.springframework.http.HttpStatus.BAD_REQUEST;
 public class UserController {
 
     private final UserService service;
+    private final UserRoleService roleService;
 
     private ObjectId requireTenant() {
         var t = TenantContext.getTenantId();
@@ -33,7 +39,7 @@ public class UserController {
     }
 
     @GetMapping
-    public PageDto<User> list(
+    public ApiResponse<PageDto<UserListItem>> list(
             @RequestParam(defaultValue = "0") Integer page,
             @RequestParam(defaultValue = "10") Integer size,
             @RequestParam(required = false) String q,
@@ -45,30 +51,113 @@ public class UserController {
                 q, status, page, size, tenantId.toHexString());
 
         Page<User> p = service.list(tenantId, q, status, pageable);
-        log.info("[USERS] OK page={} size={} total={}", p.getNumber(), p.getSize(), p.getTotalElements());
-        return PageDto.of(p);
+
+        // Mapear cada User a UserListItem con roles
+        List<UserListItem> items = p.getContent().stream()
+                .map(u -> new UserListItem(
+                        u.getId().toHexString(),
+                        u.getEmail(),
+                        u.getName(),
+                        u.getStatus(),
+                        u.getCreatedAt(),
+                        u.getUpdatedAt(),
+                        roleService.getRoleCode(tenantId, u.getId())
+                ))
+                .toList();
+
+        PageDto<UserListItem> dto = PageDto.of(p, items);
+
+        log.info("[USERS] OK page={} size={} total={}", dto.getPage(), dto.getSize(), dto.getTotal());
+
+        return ApiResponse.ok("Usuarios listados", null, dto);
     }
 
     @GetMapping("/{id}")
-    public User get(@PathVariable ObjectId id) {
-        return service.get(requireTenant(), id);
+    public ApiResponse<UserDetail> get(@PathVariable ObjectId id) {
+        ObjectId tenantId = requireTenant();
+
+        User u = service.get(tenantId, id);
+        List<String> roles = roleService.getRoleCode(tenantId, u.getId());
+
+        UserDetail dto = new UserDetail(
+                u.getId().toHexString(),
+                u.getEmail(),
+                u.getName(),
+                u.getStatus(),
+                u.getCreatedAt(),
+                u.getUpdatedAt(),
+                roles
+        );
+
+        return ApiResponse.ok("Usuario encontrado", null, dto);
     }
 
     @PostMapping
-    public ResponseEntity<User> create(@RequestBody User body) {
-        User saved = service.create(requireTenant(), body);
-        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+    public ApiResponse<UserDetail> create(@RequestBody User body) {
+        ObjectId tenantId = requireTenant();
+
+        User saved = service.create(tenantId, body);
+        List<String> roles = roleService.getRoleCode(tenantId, saved.getId());
+
+        UserDetail dto = new UserDetail(
+                saved.getId().toHexString(),
+                saved.getEmail(),
+                saved.getName(),
+                saved.getStatus(),
+                saved.getCreatedAt(),
+                saved.getUpdatedAt(),
+                roles
+        );
+
+        return ApiResponse.created("Usuario creado", null, dto);
     }
 
     @PutMapping("/{id}")
-    public User update(@PathVariable ObjectId id, @RequestBody User body) {
-        return service.update(requireTenant(), id, body);
+    public ApiResponse<UserDetail> update(@PathVariable ObjectId id, @RequestBody User body) {
+        ObjectId tenantId = requireTenant();
+
+        User updated = service.update(tenantId, id, body);
+        List<String> roles = roleService.getRoleCode(tenantId, updated.getId());
+
+        UserDetail dto = new UserDetail(
+                updated.getId().toHexString(),
+                updated.getEmail(),
+                updated.getName(),
+                updated.getStatus(),
+                updated.getCreatedAt(),
+                updated.getUpdatedAt(),
+                roles
+        );
+
+        return ApiResponse.ok("Usuario actualizado", null, dto);
     }
 
     @DeleteMapping("/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable ObjectId id) {
+    public ApiResponse<Void> delete(@PathVariable ObjectId id) {
         service.delete(requireTenant(), id);
+        return ApiResponse.ok("Usuario eliminado", null, null);
+    }
+
+    @Value
+    public static class UserListItem {
+        String id;
+        String email;
+        String name;
+        String status;
+        Instant createdAt;
+        Instant updatedAt;
+        List<String> roles;
+    }
+
+    @Value
+    public static class UserDetail {
+        String id;
+        String email;
+        String name;
+        String status;
+        Instant createdAt;
+        Instant updatedAt;
+        List<String> roles;
     }
 
     @Value
@@ -78,8 +167,8 @@ public class UserController {
         long total;
         java.util.List<T> data;
 
-        public static <T> PageDto<T> of(Page<T> p) {
-            return new PageDto<>(p.getNumber(), p.getSize(), p.getTotalElements(), p.getContent());
+        public static <T> PageDto<T> of(Page<?> p, List<T> items) {
+            return new PageDto<>(p.getNumber(), p.getSize(), p.getTotalElements(), items);
         }
     }
 }

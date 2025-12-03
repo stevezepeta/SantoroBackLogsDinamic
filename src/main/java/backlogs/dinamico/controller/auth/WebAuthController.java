@@ -92,20 +92,18 @@ public class WebAuthController {
 
     // -------------------- Login --------------------
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ApiResponse<Map<String, Object>> login(
-            @RequestBody LoginReq req,
-            @RequestHeader(value = "X-Org-Code", required = false) String orgCode,
-            @RequestHeader(value = "X-Tenant", required = false) ObjectId tenantHeader) {
+    public ApiResponse<Map<String, Object>> login(@RequestBody LoginReq req) {
 
-        // 1) Resuelve tenant desde el ThreadLocal que setea el filtro (TenantHeaderFilter)
-        ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) tenantId = tenantHeader;
-        if (tenantId == null) {
-            throw new ResponseStatusException(BAD_REQUEST, "missing_tenant");
+        if (req == null ||
+                !StringUtils.hasText(req.getEmail()) ||
+                !StringUtils.hasText(req.getPassword())) {
+
+            throw new ResponseStatusException(BAD_REQUEST, "El email y password es requerido");
         }
 
         String email = req.getEmail().trim().toLowerCase();
-        User u = userRepo.findByTenantIdAndEmailIgnoreCase(tenantId, email)
+
+        User u = userRepo.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new BadCredentialsException("bad"));
 
         if (!"active".equalsIgnoreCase(u.getStatus())) {
@@ -113,6 +111,11 @@ public class WebAuthController {
         }
         if (!passwordEncoder.matches(req.getPassword(), u.getPasswordHash())) {
             throw new BadCredentialsException("bad");
+        }
+
+        ObjectId tenantId = u.getTenantId();
+        if (tenantId == null) {
+            throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "user_without_tenant");
         }
 
         List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, u.getId())

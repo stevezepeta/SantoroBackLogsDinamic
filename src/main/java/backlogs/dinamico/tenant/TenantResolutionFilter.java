@@ -35,12 +35,31 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
     @Value("${security.jwt.secret:}")
     private String jwtSecret;
 
+    private static final String[] PUBLIC_PATHS = {
+            "/api/auth/login",
+            "/api/auth/accept-invite",
+            "/api/auth/forgot-password",
+            "/api/auth/reset-password",
+            "/api/core/bootstrap-admin",
+            "/actuator/health"
+    };
+
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String uri = request.getRequestURI();
         String method = request.getMethod();
 
-        return "/api/catalogs/organizations".equals(uri) && HttpMethod.POST.matches(method);
+        for (String p : PUBLIC_PATHS) {
+            if (uri.startsWith(p)) {
+                return true;
+            }
+        }
+
+        if ("/api/catalogs/organizations".equals(uri) && HttpMethod.POST.matches(method)) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override

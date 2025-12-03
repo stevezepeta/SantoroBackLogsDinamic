@@ -74,8 +74,6 @@ public class SecurityConfig {
 
                     // Auth público (web)
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/**").permitAll();
-                    auth.requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll();
-                    auth.requestMatchers(HttpMethod.POST, "/api/auth/accept-invite").permitAll();
 
                     // Crear PRIMER admin del tenant (sin token)
                     auth.requestMatchers(HttpMethod.POST, "/api/core/bootstrap-admin").permitAll();

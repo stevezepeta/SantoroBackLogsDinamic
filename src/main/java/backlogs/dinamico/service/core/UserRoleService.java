@@ -100,4 +100,19 @@ public class UserRoleService {
         }
         return role;
     }
+
+    public List<Role> getRole(ObjectId tenantId, ObjectId userId) {
+        return userRoleRepo.findByTenantIdAndUserId(tenantId, userId)
+                .stream()
+                .map(link -> roleRepo.findById(link.getRoleId()).orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    public List<String> getRoleCode(ObjectId tenantId, ObjectId userId) {
+        return getRole(tenantId, userId).stream()
+                .map(Role::getCode)
+                .toList();
+    }
+
 }

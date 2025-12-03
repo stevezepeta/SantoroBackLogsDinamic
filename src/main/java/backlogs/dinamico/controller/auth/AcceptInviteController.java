@@ -41,10 +41,18 @@ public class AcceptInviteController {
     @PostMapping("/accept-invite")
     public ResponseEntity<ApiResponse<Map<String, Object>>> accept(@RequestBody AcceptInviteReq req) {
 
-        var data = inviteServices.accept(req.token(), req.name(), req.password());
+        var data = inviteServices.accept(
+                req.token(),
+                req.name(),
+                req.password()
+        );
 
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResponse.created("Usuario activado", null, data));
+                .body(ApiResponse.created(
+                        "Usuario activado",
+                        null,
+                        data)
+                );
 
     }
 
