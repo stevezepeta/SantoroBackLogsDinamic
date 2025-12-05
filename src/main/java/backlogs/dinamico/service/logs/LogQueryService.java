@@ -13,10 +13,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.NoSuchElementException;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
+import java.util.LinkedHashMap;
+import java.util.*;
 
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.*;
 
@@ -25,6 +26,10 @@ import static org.springframework.data.mongodb.core.aggregation.Aggregation.*;
 public class LogQueryService {
 
     private final MongoTemplate mongo;
+
+    // Formato de fecha
+    private static final DateTimeFormatter LEGACY_DT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss").withZone(ZoneOffset.UTC);
 
     private Criteria base(ObjectId tenantId) {
         return Criteria.where("tenantId").is(tenantId);
@@ -42,8 +47,8 @@ public class LogQueryService {
         if (page < 1) page = 1;
         if (size < 1 || size > 200) size = 200;
 
-        if (!StringUtils.hasText(sort))  sort  = "timestamp"; // default
-        if (!StringUtils.hasText(order)) order = "desc";       // default
+        if (!StringUtils.hasText(sort))  sort  = "timestamp";
+        if (!StringUtils.hasText(order)) order = "desc";
 
         if (filters == null) filters = java.util.Collections.emptyMap();
 
@@ -84,37 +89,66 @@ public class LogQueryService {
         q.with(Sort.by(dir, sort));
         q.with(PageRequest.of(page - 1, size));
 
-        // paginado
-//        PageRequest pr = PageRequest.of(page - 1, size);
-//        q.with(pr);
 
         // ejecutar
         List<Document> data = mongo.find(q, Document.class, "logs");
         long total = mongo.count(Query.of(q).limit(-1).skip(-1), "logs");
 
-        // proyeccion para el grid
+        // proyeccion legacy
         List<Map<String,Object>> rows = new ArrayList<>();
 
         for (Document d : data) {
-            Map<String, Object> row = new java.util.HashMap<>();
 
-            // _id seguro a String
-            Object _id = d.get("_id");
-            String idStr = (_id instanceof org.bson.types.ObjectId)
-                    ? ((org.bson.types.ObjectId)_id).toHexString()
-                    : String.valueOf(_id);
+            // id seguro
+            Object idObj = d.get("_id");
+            String idStr = (idObj instanceof ObjectId oid) ? oid.toHexString() : String.valueOf(idObj);
 
-            row.put("id", idStr);
-            row.put("timestamp", d.get("timestamp"));          // puede ser null: OK
-            row.put("level", d.get("level"));                  // puede ser null: OK
-            row.put("message", d.getString("message"));        // puede ser null: OK
-            row.put("processType", d.getString("processType"));// puede ser null: OK
-            row.put("device", d.getString("device"));          // puede ser null: OK
-            row.put("errorCode", d.getString("errorCode"));    // puede ser null: OK
-            row.put("sessionToken", d.getString("sessionToken")); // puede ser null: OK
+            Instant ts = null;
+            Object rawTs = d.get("timestamp");
+            if (rawTs instanceof Date date) {
+                ts = date.toInstant();
+            } else if (rawTs instanceof Instant instant) {
+                ts = instant;
+            }
+
+            String dateStr = (ts != null) ? LEGACY_DT.format(ts) : null;
+
+            String level = d.getString("level");
+            String message = d.getString("message");
+            String device = d.getString("device");
+            String scanDevice = d.getString("scanDevice");
+            String processType = d.getString("processType");
+            String baseCode = d.getString("baseCode");
+            String errorCode = d.getString("errorCode");
+            String sessionToken = d.getString("sessionToken");
+
+            String personId = d.getString("personId");
+            String officeId = d.getString("officeId");
+
+            // Person y Oficinas
+
+            Map<String, Object> person = buildPerson(tenantId, personId);
+            Map<String, Object> oficina = buildOffice(tenantId, officeId);
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id",           idStr);
+            row.put("date",         dateStr);
+            row.put("type",         level);
+            row.put("person",       person);
+            row.put("device",       device);
+            row.put("scanDevice",   scanDevice);
+            row.put("process",      processType);
+            row.put("message",      message);
+            row.put("oficina",      oficina);
+            row.put("paisId",       oficina.get("paisId"));
+            row.put("estadoId",     oficina.get("estadoId"));
+            row.put("municipioId",  oficina.get("municipioId"));
+            row.put("trackingCode", baseCode);
+            row.put("errorCode",    errorCode);
+            row.put("sessionToken", sessionToken);
+            row.put("baseCode",     baseCode);
 
             rows.add(row);
-
         }
 
         return Map.of(
@@ -125,16 +159,188 @@ public class LogQueryService {
         );
     }
 
+    // Mapenando por Id
+    private Map<String, Object> mapLegacyFromDoc(ObjectId tenantId, Document d) {
+
+        Object idObj = d.get("_id");
+        String idStr = (idObj instanceof ObjectId oid)
+                ? oid.toHexString()
+                : String.valueOf(idObj);
+
+        Instant ts = null;
+        Object rawTs = d.get("timestamp");
+        if (rawTs instanceof Date date) {
+            ts = date.toInstant();
+        } else if (rawTs instanceof Instant instant) {
+            ts = instant;
+        }
+
+        String dateStr = (ts != null) ? LEGACY_DT.format(ts) : null;
+
+        String level        = d.getString("level");
+        String message      = d.getString("message");
+        String device       = d.getString("device");
+        String scanDevice   = d.getString("scanDevice");
+        String processType  = d.getString("processType");
+        String baseCode     = d.getString("baseCode");
+        String errorCode    = d.getString("errorCode");
+        String sessionToken = d.getString("sessionToken");
+
+        String personId = d.getString("personId");
+        String officeId = d.getString("officeId");
+
+        // Person y Oficinas
+        Map<String, Object> person = buildPerson(tenantId, personId);
+        Map<String, Object> oficina = buildOffice(tenantId, officeId);
+
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id",           idStr);
+        row.put("date",         dateStr);
+        row.put("type",         level);
+        row.put("person",       person);
+        row.put("device",       device);
+        row.put("scanDevice",   scanDevice);
+        row.put("process",      processType);
+        row.put("message",      message);
+        row.put("oficina",      oficina);
+        row.put("paisId",       oficina.get("paisId"));
+        row.put("estadoId",     oficina.get("estadoId"));
+        row.put("municipioId",  oficina.get("municipioId"));
+        row.put("trackingCode", baseCode);
+        row.put("errorCode",    errorCode);
+        row.put("sessionToken", sessionToken);
+        row.put("baseCode",     baseCode);
+
+        return row;
+    }
+
+
+    // HELPER: Person y Oficina
+    private Map<String, Object> buildPerson(ObjectId tenantId, String personId) {
+
+        Map<String, Object> person = new LinkedHashMap<>();
+
+        if (!StringUtils.hasText(personId)) {
+            person.put("id",              null);
+            person.put("curp",            null);
+            person.put("nombres",         null);
+            person.put("primerApellido",  null);
+            person.put("segundoApellido", null);
+            person.put("sexo",            null);
+            person.put("nacionalidad",    null);
+            person.put("fechaNacimiento", null);
+            person.put("direccion",       null);
+
+            return person;
+        }
+
+        Criteria c = Criteria.where("tenant_id").is(tenantId);
+        if (personId.matches("^[0-9a-fA-F]{24}$")) {
+            c = c.and("_id").is(new ObjectId(personId));
+        } else {
+            c = c.and("curp").is(personId);
+        }
+
+        Query qp = new Query(c);
+        Document personDoc = mongo.findOne(qp, Document.class, "persons");
+
+        if (personDoc == null) {
+            person.put("id",              personId);
+            person.put("curp",            null);
+            person.put("nombres",         null);
+            person.put("primerApellido",  null);
+            person.put("segundoApellido", null);
+            person.put("sexo",            null);
+            person.put("nacionalidad",    null);
+            person.put("fechaNacimiento", null);
+            person.put("direccion",       null);
+
+            return person;
+        }
+
+        Object pid = personDoc.get("_id");
+        String pidStr = (pid instanceof ObjectId oid)
+                ? oid.toHexString()
+                : String.valueOf(pid);
+
+        person.put("id",       pidStr);
+        person.put("curp",     personDoc.getString("curp"));
+        // Tu modelo sólo tiene "name" completo
+        person.put("nombres",  personDoc.getString("name"));
+        person.put("primerApellido",  null);
+        person.put("segundoApellido", null);
+        person.put("sexo",            null);
+        person.put("nacionalidad",    null);
+        person.put("fechaNacimiento", null);
+        person.put("direccion",       null);
+
+        return person;
+    }
+
+    private Map<String, Object> buildOffice(ObjectId tenantId, String officeId) {
+
+        Map<String, Object> oficina = new LinkedHashMap<>();
+
+        if (!StringUtils.hasText(officeId)) {
+            oficina.put("id",          null);
+            oficina.put("nombre",      null);
+            oficina.put("direccion",   null);
+            oficina.put("paisId",      null);
+            oficina.put("estadoId",    null);
+            oficina.put("municipioId", null);
+
+            return oficina;
+        }
+
+        Criteria c = Criteria.where("tenant_id").is(tenantId);
+
+        if (officeId.matches("^[0-9a-fA-F]{24}$")) {
+            c = c.and("_id").is(new ObjectId(officeId));
+        } else {
+            c = c.and("name").is(officeId);
+        }
+
+        Query qp = new Query(c);
+        Document officeDoc = mongo.findOne(qp, Document.class, "offices");
+
+        if (officeDoc == null) {
+            oficina.put("id",          officeId);
+            oficina.put("nombre",      null);
+            oficina.put("direccion",   null);
+            oficina.put("paisId",      null);
+            oficina.put("estadoId",    null);
+            oficina.put("municipioId", null);
+
+            return oficina;
+        }
+
+        Object oid = officeDoc.get("_id");
+        String oidStr = (oid instanceof ObjectId x)
+                ? x.toHexString()
+                :String.valueOf(oid);
+
+        oficina.put("id",        oidStr);
+        oficina.put("nombre",    officeDoc.getString("name"));
+        oficina.put("direccion", officeDoc.getString("address"));
+        oficina.put("paisId",    officeDoc.get("country_id"));
+        oficina.put("estadoId",  officeDoc.get("state_id"));
+        oficina.put("municipioId", officeDoc.get("municipality_id"));
+
+        return oficina;
+
+    }
+
+
     public Map<String, Object> getOne(ObjectId tenantId, ObjectId id) {
 
         Query q = new Query(Criteria.where("_id").is(id).and("tenantId").is(tenantId));
         Document d = mongo.findOne(q, Document.class, "logs");
 
-        if (d == null) throw new NoSuchElementException("log_not_found");
-        // convertir _id a string
-        d.put("id", d.getObjectId("_id").toHexString());
-        d.remove("_id");
-        return d;
+        if (d == null) {
+            throw new NoSuchElementException("log_not_found");
+        }
+
+        return mapLegacyFromDoc(tenantId, d);
     }
 
     public Map<String, Object> summary(ObjectId tenantId, Instant from, Instant to) {
@@ -149,9 +355,6 @@ public class LogQueryService {
         }
 
         MatchOperation match = match(c);
-
-        // total
-        CountOperation total = Aggregation.count().as("total");
 
         // por nivel
         GroupOperation byLevel = group("level").count().as("count");
@@ -206,7 +409,6 @@ public class LogQueryService {
                 .and(DateOperators.DateTrunc.truncateValueOf("timestamp").to(unit)).as("ts");
 
         GroupOperation group = Aggregation.group("ts").count().as("count");
-
         SortOperation sortOp = Aggregation.sort(Sort.Direction.ASC, "ts");
         ProjectionOperation out = Aggregation.project("ts", "count");
 

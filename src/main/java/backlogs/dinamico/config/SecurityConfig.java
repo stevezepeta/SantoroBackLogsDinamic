@@ -69,6 +69,13 @@ public class SecurityConfig {
                     auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
                     auth.requestMatchers("/api/ingest/**").permitAll();
 
+                    // Biografico sin login
+                    auth.requestMatchers(HttpMethod.POST,
+                            "/api/enrollCustomer/enroll/biographic"
+                    ).permitAll();
+
+                    auth.requestMatchers(HttpMethod.GET, "/api/enrollCustomer/enroll/persons/**").permitAll();
+
                     // Catálogos públicos
                     auth.requestMatchers(HttpMethod.GET, "/api/catalogs/**").permitAll();
 

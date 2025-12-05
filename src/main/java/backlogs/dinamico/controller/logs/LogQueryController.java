@@ -1,16 +1,17 @@
 package backlogs.dinamico.controller.logs;
 
 import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.service.logs.LogCommandService;
 import backlogs.dinamico.service.logs.LogQueryService;
 import backlogs.dinamico.tenant.TenantContext;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -19,10 +20,6 @@ import java.util.Map;
 public class LogQueryController {
 
   private final LogQueryService service;
-
-  private static void putIfText(Map<String, String> m, String key, String value) {
-    if (value != null && !value.isBlank()) m.put(key, value);
-  }
 
   @GetMapping
   public ResponseEntity<ApiResponse<Map<String, Object>>> list(
@@ -65,7 +62,7 @@ public class LogQueryController {
     put(filters, "environment", environment);
 
     var result = service.list(tenantId, filters, from, to, page, size, sort, order);
-    return ResponseEntity.ok(ApiResponse.ok("Logs", "/api/logs", result));
+    return ResponseEntity.ok(ApiResponse.ok("Logs", null, result));
 
   }
 
@@ -73,7 +70,8 @@ public class LogQueryController {
   public ResponseEntity<ApiResponse<Map<String, Object>>> get(@PathVariable ObjectId id) {
     ObjectId tenantId = TenantContext.getTenantId();
     var doc = service.getOne(tenantId, id);
-    return ResponseEntity.ok(ApiResponse.ok("Detalle del log", "/api/logs/"+id, doc));
+
+    return ResponseEntity.ok(ApiResponse.ok("Detalle del log", null, doc));
   }
 
   @GetMapping("/stats/summary")
@@ -83,7 +81,8 @@ public class LogQueryController {
   ) {
     ObjectId tenantId = TenantContext.getTenantId();
     var data = service.summary(tenantId, from, to);
-    return ResponseEntity.ok(ApiResponse.ok("Resumen", "/api/logs/stats/summary", data));
+
+    return ResponseEntity.ok(ApiResponse.ok("Resumen", null, data));
   }
 
   // TIMELINE
@@ -97,10 +96,9 @@ public class LogQueryController {
 
     ObjectId tenantId = TenantContext.getTenantId();
     var data = service.timeline(tenantId, from, to, bucket, level);
-    return ResponseEntity.ok(ApiResponse.ok("Serie de tiempo", "/api/logs/stats/timeline", data));
+    return ResponseEntity.ok(ApiResponse.ok("Serie de tiempo", null, data));
 
   }
-
 
   private static void put(java.util.Map<String,String> m, String k, String v) {
     if (v != null && !v.isBlank()) m.put(k, v);
