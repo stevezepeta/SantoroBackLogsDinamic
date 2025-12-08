@@ -1,6 +1,9 @@
 package backlogs.dinamico.controller.auth;
 
 import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.api.dto.auth.LoginResponse;
+import backlogs.dinamico.api.dto.auth.QrLoginRequest;
+import backlogs.dinamico.api.dto.auth.QrTokenResponse;
 import backlogs.dinamico.infra.security.JwtTokenService;
 import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
@@ -9,13 +12,15 @@ import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
 import backlogs.dinamico.repository.core.UserRoleRepository;
-import backlogs.dinamico.tenant.TenantContext;
+import backlogs.dinamico.service.auth.QrLoginService;
 import jakarta.validation.Valid;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
 import org.bson.types.ObjectId;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
@@ -40,6 +45,8 @@ public class WebAuthController {
     private final OrganizationRepository orgRepo;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService tokens;
+
+    private final QrLoginService qrLoginService;
 
     // -------------------- Register --------------------
     @PostMapping(value = "/register", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -150,6 +157,30 @@ public class WebAuthController {
                         "id",   tenantId.toHexString(),
                         "name", "(unknown)"
                 ));
+    }
+
+    // Login desde la PC el usuario ya autenticado pide el QR
+    @GetMapping("/qr-token")
+    public ResponseEntity<ApiResponse> createQrToken() {
+
+        QrTokenResponse qrToken = qrLoginService.createQrToken();
+        return ResponseEntity.ok(
+                ApiResponse.success("Qr Token generado", qrToken)
+        );
+
+    }
+
+    // Desde el celular escanear el QR
+    @PostMapping("/qr-login")
+    public ResponseEntity<ApiResponse> qrLogin(@Valid
+                                               @RequestBody QrLoginRequest request,
+                                               Authentication auth) {
+
+        LoginResponse login = qrLoginService.loginWithQrToken(request.qrToken(), auth);
+        return ResponseEntity.ok(
+                ApiResponse.success("Qr Login successful", login)
+        );
+
     }
 
 

@@ -105,4 +105,6 @@ public class UserService {
         if (tenantId == null) throw new ResponseStatusException(BAD_REQUEST, "missing_tenant");
         return userRepository.findByTenantIdAndEmailIgnoreCase(tenantId, email);
     }
+
+
 }

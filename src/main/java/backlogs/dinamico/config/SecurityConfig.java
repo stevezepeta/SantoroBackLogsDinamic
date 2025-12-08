@@ -81,6 +81,8 @@ public class SecurityConfig {
 
                     // Auth público (web)
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/**").permitAll();
+                    auth.requestMatchers("/api/auth/qr-token").permitAll();
+                    auth.requestMatchers("/api/auth/qr-login").authenticated();
 
                     // Crear PRIMER admin del tenant (sin token)
                     auth.requestMatchers(HttpMethod.POST, "/api/core/bootstrap-admin").permitAll();
