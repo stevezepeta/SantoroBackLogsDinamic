@@ -41,7 +41,12 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
             "/api/auth/forgot-password",
             "/api/auth/reset-password",
             "/api/core/bootstrap-admin",
-            "/actuator/health"
+            "/actuator/health",
+
+            "/api/auth/qr-token",
+            "/api/auth/refresh",
+
+            "/ws"
     };
 
     @Override

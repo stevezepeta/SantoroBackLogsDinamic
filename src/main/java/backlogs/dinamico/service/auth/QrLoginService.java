@@ -28,6 +28,7 @@ public class QrLoginService {
     private final QrLoginSessionRepository qrRepo;
     private final UserService userService;
     private final JwtTokenService jwtTokenService;
+    private final QrLoginNotifier qrLoginNotifier;
 
     // Duracion del token 2 min
     private static final Duration QR_TOKEN_TTL = Duration.ofMinutes(2);
@@ -83,6 +84,10 @@ public class QrLoginService {
             throw new IllegalArgumentException("QR token already used");
         }
         if (session.getExpiresAt().isBefore(now)) {
+            session.setUsed(true);
+            qrRepo.save(session);
+            qrLoginNotifier.notifyExpired(qrToken);
+
             throw new IllegalArgumentException("QR Token expired");
         }
 
@@ -96,10 +101,15 @@ public class QrLoginService {
         User user = userService.findByEmail(tenantId, email)
                 .orElseThrow(() -> new IllegalStateException("User not found"));
 
-        // Se genera el JWT igual que el login
-        String jwt = jwtTokenService.generate(user, null, tenantId);
+        String accessToken = jwtTokenService.generate(user, null, tenantId);
+        String refreshToken = jwtTokenService.generateRefresh(user, null, tenantId);
 
-        return new LoginResponse(jwt, null, "Bearer");
+        LoginResponse resp = new LoginResponse(accessToken, refreshToken, "Bearer");
+
+        // Notificacion a la PC
+        qrLoginNotifier.notifySuccess(qrToken, resp);
+
+        return resp;
 
     }
 

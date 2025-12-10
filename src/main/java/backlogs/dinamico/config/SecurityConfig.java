@@ -79,10 +79,21 @@ public class SecurityConfig {
                     // Catálogos públicos
                     auth.requestMatchers(HttpMethod.GET, "/api/catalogs/**").permitAll();
 
-                    // Auth público (web)
-                    auth.requestMatchers(HttpMethod.POST, "/api/auth/**").permitAll();
-                    auth.requestMatchers("/api/auth/qr-token").permitAll();
-                    auth.requestMatchers("/api/auth/qr-login").authenticated();
+                    auth.requestMatchers("/ws/**").permitAll();
+
+                    auth.requestMatchers(HttpMethod.GET, "/api/auth/qr-token").permitAll();
+
+                    // Auth público (web) que NO requiere estar logueado
+                    auth.requestMatchers(HttpMethod.POST,
+                            "/api/auth/login",
+                            "/api/auth/refresh",
+                            "/api/auth/accept-invite",
+                            "/api/auth/forgot-password",
+                            "/api/auth/reset-password"
+                    ).permitAll();
+
+                    // QR login desde el celular: aquí SÍ debe venir JWT del usuario
+                    auth.requestMatchers(HttpMethod.POST, "/api/auth/qr-login").authenticated();
 
                     // Crear PRIMER admin del tenant (sin token)
                     auth.requestMatchers(HttpMethod.POST, "/api/core/bootstrap-admin").permitAll();
