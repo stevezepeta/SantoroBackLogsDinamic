@@ -36,6 +36,9 @@ public class JwtTokenService {
     @Value("${security.jwt.ttl-minutes:120}")
     private long ttlMinutes;
 
+    @Value("${security.jwt.refresh-ttl-minutes:4320}") // 3 dias por default
+    private long refreshTtlMinutes;
+
     private ObjectId organizationId;
 
     private Key key;
@@ -71,6 +74,7 @@ public class JwtTokenService {
                 .setSubject(user.getEmail())
                 .setIssuedAt(Date.from(now))
                 .setExpiration(Date.from(now.plus(ttlMinutes, ChronoUnit.MINUTES)))
+                .claim("kind", "access")
                 .claim("uid", user.getId() == null ? null : user.getId().toHexString())
                 .claim("tenantId", tenantId == null ? null : tenantId.toHexString())
                 .claim("email", user.getEmail())
@@ -87,6 +91,41 @@ public class JwtTokenService {
                 .setSigningKey(key)
                 .parseClaimsJws(token)
                 .getBody();
+    }
+
+    // Generando el Refresh
+    public String generateRefresh(User user, List<Role> roles, ObjectId tenantId) {
+
+        Instant now = Instant.now();
+
+        List<String> roleCodes = (roles == null)
+                ? List.of()
+                : roles.stream().map(Role::getCode).toList();
+
+        return Jwts.builder()
+                .setIssuer(issuer)
+                .setSubject(user.getEmail())
+                .setIssuedAt(Date.from(now))
+                .setExpiration(Date.from(now.plus(refreshTtlMinutes, ChronoUnit.MINUTES)))
+                .claim("kind", "refresh") // clave
+                .claim("uid", user.getId() == null ? null : user.getId().toHexString())
+                .claim("tenantId", tenantId == null ? null : tenantId.toHexString())
+                .claim("email", user.getEmail())
+                .claim("name", user.getName())
+                .claim("roles", roleCodes)
+                .signWith(SignatureAlgorithm.HS256, key)
+                .compact();
+    }
+
+    public Claims verifyRefresh(String token) throws JwtException {
+
+        Claims c = verify(token);
+        String kind = c.get("kind", String.class);
+        if (!"refresh".equals(kind)) {
+            throw new JwtException("invalid_refresh_token");
+        }
+
+        return c;
     }
 
     public String generateInviteJwt(ObjectId tenantId,

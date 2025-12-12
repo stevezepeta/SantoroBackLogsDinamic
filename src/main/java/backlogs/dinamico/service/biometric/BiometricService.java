@@ -3,8 +3,10 @@ package backlogs.dinamico.service.biometric;
 import backlogs.dinamico.config.BiometricProps;
 import backlogs.dinamico.model.biometric.FingerPrint;
 import backlogs.dinamico.model.biometric.Person;
+import backlogs.dinamico.model.catalog.Office;
 import backlogs.dinamico.repository.biometric.FingerPrintRepository;
 import backlogs.dinamico.repository.biometric.PersonRepository;
+import backlogs.dinamico.repository.catalog.OfficeRepository;
 import backlogs.dinamico.tenant.TenantContext;
 import com.machinezoo.sourceafis.FingerprintImage;
 import com.machinezoo.sourceafis.FingerprintImageOptions;
@@ -27,8 +29,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.Map;
-import java.util.Optional;
+import java.time.LocalDate;
+import java.util.*;
 
 import static java.lang.Math.round;
 
@@ -39,6 +41,7 @@ public class BiometricService {
     private final PersonRepository personRepo;
     private final FingerPrintRepository fpRepo;
     private final BiometricProps props;
+    private final OfficeRepository officeRepo;
 
     private static final String[] KEYS = {
             "thumbLeft","indexLeft","middleLeft","ringLeft","littleLeft",
@@ -162,6 +165,107 @@ public class BiometricService {
         return BigDecimal.valueOf(v).setScale(2, RoundingMode.HALF_UP).doubleValue();
     }
 
+    // List Persons
+    public List<Map<String, Object>> listPersons(ObjectId tenantId) {
+
+        List<Person> persons = personRepo.findByTenantId(tenantId);
+        List<Map<String, Object>> out = new ArrayList<>();
+
+        for (Person p : persons) {
+
+            Map<String, Object> oficina = null;
+            Long oficinaSeq = p.getOficinaId();
+
+            if (oficinaSeq != null) {
+
+                    Optional<Office> opt = officeRepo.findByTenantIdAndSeq(tenantId, oficinaSeq);
+
+                    if (opt.isPresent()) {
+
+                        Office o = opt.get();
+                        oficina = new LinkedHashMap<>();
+
+                        oficina.put("id",          o.getId() != null ? o.getId().toHexString() : null);
+                        oficina.put("nombre",      o.getName());
+                        oficina.put("direccion",   o.getAddress());
+                        oficina.put("paisId",      o.getCountryId());
+                        oficina.put("estadoId",    o.getStateId());
+                        oficina.put("municipioId", o.getMunicipalityId());
+                    }
+            }
+
+            Map<String, Object> dto = new LinkedHashMap<>();
+            dto.put("id",               p.getId() != null ? p.getId().toHexString() : null);
+            dto.put("curp",             p.getCurp());
+            dto.put("nombres",          p.getName());
+            dto.put("primerApellido",   p.getPrimerApellido());
+            dto.put("segundoApellido",  p.getSegundoApellido());
+            dto.put("fechaNacimiento",  p.getFechaNacimiento() != null ? p.getFechaNacimiento().toString() : null);
+            dto.put("sexo",             p.getSexo());
+            dto.put("nacionalidad",     p.getNacionalidad());
+            dto.put("direccion",        p.getDireccion());
+            dto.put("oficina",          oficina);
+            dto.put("facePhotoPath",    p.getFacePhotoPath());
+
+            out.add(dto);
+
+        }
+
+        return out;
+    }
+
+    public Map<String, Object> toPersonLegacy(Person p) {
+
+        Map<String, Object> out = new LinkedHashMap<>();
+
+        // id's básicos
+        out.put("id",       p.getId() != null ? p.getId().toHexString() : null);
+        out.put("tenantId", p.getTenantId() != null ? p.getTenantId().toHexString() : null);
+
+        // datos biográficos
+        out.put("curp",            p.getCurp());
+        out.put("name",            p.getName());
+        out.put("primerApellido",  p.getPrimerApellido());
+        out.put("segundoApellido", p.getSegundoApellido());
+        out.put("fechaNacimiento",
+                p.getFechaNacimiento() != null ? p.getFechaNacimiento().toString() : null);
+        out.put("sexo",           p.getSexo());
+        out.put("nacionalidad",   p.getNacionalidad());
+        out.put("direccion",      p.getDireccion());
+
+        // oficina embebida
+        Map<String, Object> oficina = null;
+        if (p.getOficinaId() != null && p.getTenantId() != null) {
+            Office off = officeRepo
+                    .findByTenantIdAndSeq(p.getTenantId(), p.getOficinaId())
+                    .orElse(null);
+
+            if (off != null) {
+                oficina = new LinkedHashMap<>();
+                oficina.put("id",         off.getId() != null ? off.getId().toHexString() : null);
+                oficina.put("nombre",     off.getName());
+                oficina.put("direccion",  off.getAddress());
+                oficina.put("paisId",     off.getCountryId());
+                oficina.put("estadoId",   off.getStateId());
+                oficina.put("municipioId", off.getMunicipalityId());
+            }
+        }
+        out.put("oficina", oficina);
+
+        out.put("facePhotoPath", p.getFacePhotoPath());
+
+        return out;
+    }
+
+    // List One Person
+    public Optional<Person> findPersonByCurp(ObjectId tenantId, String curp) {
+
+        if (curp == null) return Optional.empty();
+
+        return personRepo.findByTenantIdAndCurp(tenantId, curp.trim().toUpperCase());
+    }
+
+
     public Optional<Person> findPerson(ObjectId tenantId, String curp) {
         return personRepo.findByTenantIdAndCurp(tenantId, curp);
     }
@@ -171,20 +275,66 @@ public class BiometricService {
                                    String curp,
                                    String nombres,
                                    String primerApellido,
-                                   String segundoApellido) {
+                                   String segundoApellido,
+                                   LocalDate fechaNacimiento,
+                                   String sexo,
+                                   String nacionalidad,
+                                   String direccion,
+                                   Long oficinaId) {
 
-        // Se arma el nombre completo
-        String full = buildFullName(nombres, primerApellido, segundoApellido);
+        if (curp == null || curp.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "curp_required");
+        }
 
-        Person p = personRepo.findByTenantIdAndCurp(tenantId, curp)
+        String curpNorm = curp.trim().toUpperCase();
+
+        // Validar Oficina
+        if (oficinaId != null) {
+            officeRepo.findByTenantIdAndSeq(tenantId, oficinaId)
+                    .orElseThrow(() -> new ResponseStatusException(
+                            HttpStatus.BAD_REQUEST,
+                            "oficina_no_encontrada"
+                    ));
+        }
+
+        // Buscar o crear persona por CURP
+        Person p = personRepo.findByTenantIdAndCurp(tenantId, curpNorm)
                 .orElseGet(() -> Person.builder()
                         .tenantId(tenantId)
-                        .curp(curp)
+                        .curp(curpNorm)
                         .build());
 
-        p.setName(full);
-        return personRepo.save(p);
+        // Campos biograficos
+        String nombresNorm         = normalize(nombres);
+        String primerApNorm        = normalize(primerApellido);
+        String segundoApNorm       = normalize(segundoApellido);
+        String sexoNorm            = normalize(sexo);
+        String nacionalidadNorm    = normalize(nacionalidad);
+        String direccionNorm       = normalize(direccion);
 
+        // Se arma el nombre completo
+        String fullName = buildFullName(nombresNorm, primerApNorm, segundoApNorm);
+
+        p.setName(fullName);
+
+        p.setName(nombresNorm);
+        p.setPrimerApellido(primerApNorm);
+        p.setSegundoApellido(segundoApNorm);
+
+        p.setFechaNacimiento(fechaNacimiento);
+        p.setSexo(sexoNorm);
+        p.setNacionalidad(nacionalidadNorm);
+        p.setDireccion(direccionNorm);
+
+        // Se guarda el seq de la oficina
+        p.setOficinaId(oficinaId);
+
+        return personRepo.save(p);
+    }
+
+    // Devuelve null si esta vacio
+    private String normalize(String v) {
+        return (v == null || v.isBlank()) ? null : v.trim();
     }
 
     private String buildFullName(String nombres, String a1, String a2) {

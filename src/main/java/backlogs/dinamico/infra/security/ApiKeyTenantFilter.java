@@ -34,7 +34,12 @@ import static backlogs.dinamico.security.KeyHasher.sha256b64;
 @Slf4j
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
-@ConditionalOnProperty(prefix = "multitenant", name = "require-api-key", havingValue = "true", matchIfMissing = false)
+@ConditionalOnProperty(
+        prefix = "multitenant",
+        name = "require-api-key",
+        havingValue = "true",
+        matchIfMissing = false
+)
 @RequiredArgsConstructor
 public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
@@ -56,7 +61,9 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
   private static final List<RequestMatcher> EXCLUDED = List.of(
           new AntPathRequestMatcher("/error"),
           new AntPathRequestMatcher("/actuator/**"),
-          new AntPathRequestMatcher("/api/auth/**")
+          new AntPathRequestMatcher("/api/auth/**"),
+
+          new AntPathRequestMatcher("/ws/**")
   );
 
   // Bypass explicito para crear organizations SIN API-KEY
@@ -70,18 +77,26 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
   @Override
   protected boolean shouldNotFilter(HttpServletRequest request) {
+
+    String path = request.getRequestURI();
+
     if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
 
+    // Rutas excluidas por patrón (incluye /ws/**)
     for (RequestMatcher m : EXCLUDED) {
-      if (m.matches(request)) return true;
+      if (m.matches(request)) {
+        log.debug("[ApiKeyTenantFilter] skipping path={} (EXCLUDED)", path);
+        return true;
+      }
     }
 
-    // Permite siempre crear organizaciones sin Api-Key
+    // Permitir siempre crear organizaciones sin Api-Key
     if (allowPublicCreateOrg && CREATE_ORG_POST.matches(request)) {
+      log.debug("[ApiKeyTenantFilter] skipping path={} (CREATE_ORG_POST)", path);
       return true;
     }
 
-    return false; // filtra el resto
+    return false;
   }
 
   @Override
@@ -96,7 +111,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
             req.getHeader("Authorization") != null ? "Bearer..." : "null",
             req.getHeader(tenantHeaderName));
 
-    // 1) Si ya hay tenant resuelto (por JWT u otro filtro), sigue
+
     if (TenantContext.getTenantId() != null) {
       chain.doFilter(req, res);
       return;
@@ -119,7 +134,10 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       // buscar por HASH + status
       String hash = sha256b64(apiKeyPlain);
       var opt = apiKeyRepo.findByKeyHashAndStatus(hash, "active");
-      if (opt.isEmpty()) { unauthorized(res, "Invalid API key"); return; }
+      if (opt.isEmpty()) {
+        unauthorized(res, "Invalid API key");
+        return;
+      }
 
       ApiKey key = opt.get();
 
@@ -142,7 +160,6 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
                 .environmentId(key.getEnvironmentId())
                 .build());
 
-        // particionado por tenant
         switch (strategy.toLowerCase()) {
           case "database-per-tenant" ->
                   TenantContext.setDbName(baseDb + "__" + key.getTenantId().toHexString());
@@ -158,7 +175,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       return;
     }
 
-    // 3) Fallback: aceptar X-Tenant (hex) si lo envían directamente
+    // 3) Fallback: aceptar X-Tenant (hex)
     String tenantHex = req.getHeader(tenantHeaderName);
     if (tenantHex != null && ObjectId.isValid(tenantHex)) {
       try {

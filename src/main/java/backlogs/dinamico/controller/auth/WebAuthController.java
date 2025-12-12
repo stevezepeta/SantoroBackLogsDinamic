@@ -1,6 +1,10 @@
 package backlogs.dinamico.controller.auth;
 
 import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.api.dto.auth.LoginResponse;
+import backlogs.dinamico.api.dto.auth.QrLoginRequest;
+import backlogs.dinamico.api.dto.auth.QrTokenResponse;
+import backlogs.dinamico.api.dto.auth.RefreshTokenRequest;
 import backlogs.dinamico.infra.security.JwtTokenService;
 import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
@@ -9,10 +13,14 @@ import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
 import backlogs.dinamico.repository.core.UserRoleRepository;
-import backlogs.dinamico.tenant.TenantContext;
+import backlogs.dinamico.service.auth.QrLoginService;
+import backlogs.dinamico.service.core.UserService;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
 import jakarta.validation.Valid;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
 import org.bson.types.ObjectId;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,60 +43,14 @@ import static org.springframework.http.HttpStatus.*;
 public class WebAuthController {
 
     private final UserRepository userRepo;
+    private final UserService userService;
     private final UserRoleRepository userRoleRepo;
     private final RoleRepository roleRepo;
     private final OrganizationRepository orgRepo;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService tokens;
 
-    // -------------------- Register --------------------
-    @PostMapping(value = "/register", consumes = MediaType.APPLICATION_JSON_VALUE)
-    public ResponseEntity<?> register(@RequestHeader("X-Tenant") ObjectId tenantId,
-                                      @Valid @RequestBody RegisterReq req) {
-
-        String email = req.getEmail().trim().toLowerCase();
-
-        if (userRepo.existsByTenantIdAndEmailIgnoreCase(tenantId, email)) {
-            return ResponseEntity.badRequest().body(Map.of("ok", false, "error", "email_taken"));
-        }
-
-        User u = new User();
-        u.setTenantId(tenantId);
-        u.setEmail(email);
-        u.setName(req.getName());
-        u.setPasswordHash(passwordEncoder.encode(req.getPassword()));
-        u.setStatus("active");
-        u.setCreatedAt(Instant.now());
-        u.setUpdatedAt(Instant.now());
-
-        u = userRepo.insert(u);
-
-        // Rol por defecto
-        var defaultRole = roleRepo.findByCode("TENANT_USER").orElse(null);
-        if (defaultRole != null) {
-            var link = new UserRole();
-            link.setTenantId(tenantId);
-            link.setUserId(u.getId());
-            link.setRoleId(defaultRole.getId());
-            link.setCreatedAt(Instant.now());
-            userRoleRepo.save(link);
-        }
-
-        // Generación del token
-        var links = userRoleRepo.findByTenantIdAndUserId(tenantId, u.getId());
-        List<Role> roles = links.isEmpty()
-                ? List.of()
-                : roleRepo.findAllById(links.stream().map(UserRole::getRoleId).toList());
-
-        String jwt = tokens.generate(u, roles, tenantId);
-
-        return ResponseEntity.status(201).body(Map.of(
-                "ok", true,
-                "user", Map.of("id", u.getId(), "email", u.getEmail(), "name", u.getName(), "status", u.getStatus()),
-                "roles", roles.stream().map(Role::getCode).toList(),
-                "token", jwt
-        ));
-    }
+    private final QrLoginService qrLoginService;
 
     // -------------------- Login --------------------
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -124,7 +86,11 @@ public class WebAuthController {
                 .filter(Objects::nonNull)
                 .toList();
 
-        String jwt = tokens.generate(u, roles, tenantId);
+        // Access Token
+        String accessToken = tokens.generate(u, roles, tenantId);
+
+        // Refresh Token
+        String refreshToken = tokens.generateRefresh(u, roles, tenantId);
 
         Map<String, Object> data = Map.of(
                 "organization", orgBlock(tenantId),
@@ -134,10 +100,47 @@ public class WebAuthController {
                         "name", u.getName()
                 ),
                 "roles", roles.stream().map(Role::getCode).toList(),
-                "token", jwt
+                "token", accessToken,
+                "accessToken", accessToken,
+                "refreshToken", refreshToken
         );
 
         return ApiResponse.ok("Login exitoso", null, data);
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<ApiResponse> refresh(@Valid @RequestBody RefreshTokenRequest req) {
+
+        try {
+            Claims claims = tokens.verifyRefresh(req.refreshToken());
+
+            String email = claims.get("email", String.class);
+            String tenantIdHex = claims.get("tenantId", String.class);
+
+            if (email == null || tenantIdHex == null) {
+                throw new IllegalArgumentException("Invalid refresh token claims");
+            }
+
+            ObjectId tenantId = new ObjectId(tenantIdHex);
+
+            User user = userService.findByEmail(tenantId, email)
+                    .orElseThrow(() -> new IllegalStateException("User not found"));
+
+            String newAccessToken = tokens.generate(user, null, tenantId);
+
+            String refreshToken = req.refreshToken();
+
+            LoginResponse resp = new LoginResponse(newAccessToken, refreshToken, "Bearer");
+
+            return ResponseEntity.ok(
+                    ApiResponse.success("Token refreshed", resp)
+            );
+
+        } catch (JwtException ex) {
+            return ResponseEntity.status(400)
+                    .body(ApiResponse.error("invalid_refresh_token",  ex.getMessage(), null));
+        }
+
     }
 
     private Map<String, Object> orgBlock(ObjectId tenantId) {
@@ -152,6 +155,29 @@ public class WebAuthController {
                 ));
     }
 
+    // Login desde la PC el usuario ya autenticado pide el QR
+    @GetMapping("/qr-token")
+    public ResponseEntity<ApiResponse> createQrToken() {
+
+        QrTokenResponse qrToken = qrLoginService.createQrToken();
+        return ResponseEntity.ok(
+                ApiResponse.success("Qr Token generado", qrToken)
+        );
+
+    }
+
+    // Desde el celular escanear el QR
+    @PostMapping("/qr-login")
+    public ResponseEntity<ApiResponse> qrLogin(@Valid
+                                               @RequestBody QrLoginRequest request,
+                                               Authentication auth) {
+
+        LoginResponse login = qrLoginService.loginWithQrToken(request.qrToken(), auth);
+        return ResponseEntity.ok(
+                ApiResponse.success("Qr Login successful", login)
+        );
+
+    }
 
     // -------------------- DTOs --------------------
     @Data

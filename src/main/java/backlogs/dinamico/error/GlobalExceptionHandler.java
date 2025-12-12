@@ -25,21 +25,14 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotFound(NotFoundException ex, HttpServletRequest req) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiResponse.error("not_found", ex.getMessage(), req.getRequestURI()));
+                .body(ApiResponse.error("not_found", ex.getMessage(), null));
     }
 
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ApiResponse<Void>> handleConflict(ConflictException ex, HttpServletRequest req) {
         return ResponseEntity.status(CONFLICT)
-                .body(ApiResponse.error("conflict", ex.getMessage(), req.getRequestURI()));
+                .body(ApiResponse.error("conflict", ex.getMessage(), null));
     }
-
-//    @ExceptionHandler(DuplicateKeyException.class)
-//    public ResponseEntity<ApiResponse<Void>> handleDup(DuplicateKeyException ex, HttpServletRequest req) {
-//        String msg = MongoErrors.buildDuplicateMessage(ex, "value");
-//        return ResponseEntity.status(CONFLICT)
-//                .body(ApiResponse.error("Conflict", msg, req.getRequestURI()));
-//    }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest req) {
@@ -47,7 +40,7 @@ public class GlobalExceptionHandler {
                 .map(fe -> fe.getField() + " " + fe.getDefaultMessage())
                 .collect(Collectors.joining("; "));
         return ResponseEntity.badRequest()
-                .body(ApiResponse.error("Validation_error", details, req.getRequestURI()));
+                .body(ApiResponse.error("Validation_error", details, null));
     }
 
     @ExceptionHandler({
@@ -58,13 +51,13 @@ public class GlobalExceptionHandler {
     })
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception ex, HttpServletRequest req) {
         return ResponseEntity.badRequest()
-                .body(ApiResponse.error("bad_request", ex.getMessage(), req.getRequestURI()));
+                .body(ApiResponse.error("bad_request", ex.getMessage(), null));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
     public ResponseEntity<ApiResponse<Void>> handleForbidden(AccessDeniedException ex, HttpServletRequest req) {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error("forbidden", "You don't have permission to perform this action", req.getRequestURI()));
+                .body(ApiResponse.error("forbidden", "You don't have permission to perform this action", null));
     }
 
     @ExceptionHandler(ResponseStatusException.class)
@@ -79,14 +72,14 @@ public class GlobalExceptionHandler {
             default -> "error";
         };
         return ResponseEntity.status(sc)
-                .body(ApiResponse.error(code, ex.getReason(), req.getRequestURI()));
+                .body(ApiResponse.error(code, ex.getReason(), null));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception ex, HttpServletRequest req) {
         // Log completo en tu logger; aquí devolvemos mensaje genérico
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error("internal_error", "Unexpected error", req.getRequestURI()));
+                .body(ApiResponse.error("internal_error", "Unexpected error", null));
     }
 
     @ExceptionHandler(DuplicateKeyException.class)
@@ -98,10 +91,10 @@ public class GlobalExceptionHandler {
             return ResponseEntity.status(CONFLICT)
                     .body(ApiResponse.error("role_already_exists",
                             "Ya existe un rol con ese código en esta organización.",
-                            req.getRequestURI()));
+                            null));
         }
         return ResponseEntity.status(CONFLICT)
-                .body(ApiResponse.error("write_conflict", msg, req.getRequestURI()));
+                .body(ApiResponse.error("write_conflict", msg, null));
     }
 
 }
