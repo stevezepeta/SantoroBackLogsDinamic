@@ -56,17 +56,15 @@ public class QrLoginService {
     public LoginResponse loginWithQrToken(String qrToken, Authentication auth) {
 
         if (auth == null || auth.getPrincipal() == null) {
+
+            qrLoginNotifier.notifyError(qrToken);
             throw new IllegalArgumentException("No autenticado");
         }
 
-        Object principal = auth.getPrincipal();
-        AuthUser authUser;
-
-        if (principal instanceof AuthUser au) {
-            authUser = au;
-        } else {
+        if (!(auth.getPrincipal() instanceof AuthUser authUser)) {
+            qrLoginNotifier.notifyError(qrToken);
             throw new IllegalArgumentException(
-                    "Unsupported principal type for qr-login: " + principal.getClass().getName()
+                    "Unsupported principal type for qr-login: " + auth.getPrincipal().getClass().getName()
             );
         }
 
@@ -74,21 +72,29 @@ public class QrLoginService {
         ObjectId tenantId = authUser.tenantId();
         String email = authUser.email();
 
-        // Validamos el qrToken
+        // 2) Cargar la sesión de QR
         QrLoginSession session = qrRepo.findByQrToken(qrToken)
-                .orElseThrow(() -> new IllegalArgumentException("Token QR Invalido"));
+                .orElseThrow(() -> {
+                    // QR inexistente o inválido
+                    qrLoginNotifier.notifyError(qrToken);
+                    return new IllegalArgumentException("Token QR inválido");
+                });
+
 
         Instant now = Instant.now();
 
         if (session.isUsed()) {
+            qrLoginNotifier.notifyAlreadyUsed(qrToken);
             throw new IllegalArgumentException("QR token already used");
         }
-        if (session.getExpiresAt().isBefore(now)) {
+
+        // Validar expiración
+        if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(now)) {
             session.setUsed(true);
             qrRepo.save(session);
-            qrLoginNotifier.notifyExpired(qrToken);
 
-            throw new IllegalArgumentException("QR Token expired");
+            qrLoginNotifier.notifyExpired(qrToken);
+            throw new IllegalArgumentException("QR token expired");
         }
 
         // marcamos como usado para que sea one-time
@@ -99,7 +105,10 @@ public class QrLoginService {
 
         // Se recupera el User
         User user = userService.findByEmail(tenantId, email)
-                .orElseThrow(() -> new IllegalStateException("User not found"));
+                .orElseThrow(() -> {
+                    qrLoginNotifier.notifyError(qrToken);
+                    return new IllegalStateException("User not found");
+                });
 
         String accessToken = jwtTokenService.generate(user, null, tenantId);
         String refreshToken = jwtTokenService.generateRefresh(user, null, tenantId);

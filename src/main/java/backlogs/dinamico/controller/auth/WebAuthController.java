@@ -8,7 +8,6 @@ import backlogs.dinamico.api.dto.auth.RefreshTokenRequest;
 import backlogs.dinamico.infra.security.JwtTokenService;
 import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
-import backlogs.dinamico.model.core.UserRole;
 import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
@@ -29,8 +28,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -51,6 +50,8 @@ public class WebAuthController {
     private final JwtTokenService tokens;
 
     private final QrLoginService qrLoginService;
+
+    private final SimpMessagingTemplate messagingTemplate;
 
     // -------------------- Login --------------------
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
@@ -100,7 +101,6 @@ public class WebAuthController {
                         "name", u.getName()
                 ),
                 "roles", roles.stream().map(Role::getCode).toList(),
-                "token", accessToken,
                 "accessToken", accessToken,
                 "refreshToken", refreshToken
         );
@@ -172,7 +172,26 @@ public class WebAuthController {
                                                @RequestBody QrLoginRequest request,
                                                Authentication auth) {
 
+        // Marca la sesion como usada
         LoginResponse login = qrLoginService.loginWithQrToken(request.qrToken(), auth);
+
+        // Se construye el payload que se recibira en el navegador
+        Map<String, Object> wsPayload = Map.of(
+                "status", "APPROVED",
+                "accesToken", login.accessToken(),
+                "refreshToken", login.refreshToken(),
+                "tokeType", login.tokenType()
+        );
+
+        // Se envia el mensaje al topic
+        String dest = "/topic/qr-login/" + request.qrToken();
+
+        // Respuesta simpel al movil
+        Map<String, Object> httpData = Map.of(
+                "qrToke", request.qrToken(),
+                "status", "linked"
+        );
+
         return ResponseEntity.ok(
                 ApiResponse.success("Qr Login successful", login)
         );
