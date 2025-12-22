@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.Getter;
+import org.bson.types.ObjectId;
 
 import java.util.List;
 
@@ -13,7 +14,7 @@ import java.util.List;
 @Builder
 public class OfficeResponse {
 
-    private Long id;
+    private ObjectId tenantId;
     private String name;
     private String address;
 

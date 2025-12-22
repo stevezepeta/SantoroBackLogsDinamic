@@ -17,7 +17,7 @@ public class OfficeMapper {
         }
 
         return OfficeResponse.builder()
-                .id(e.getSeq())
+                .tenantId(e.getId())
                 .name(e.getName())
                 .address(e.getAddress())
                 .countryId(e.getCountryId())

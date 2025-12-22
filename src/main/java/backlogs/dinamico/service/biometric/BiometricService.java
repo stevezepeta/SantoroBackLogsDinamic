@@ -15,6 +15,7 @@ import com.machinezoo.sourceafis.FingerprintTemplate;
 import lombok.RequiredArgsConstructor;
 
 import lombok.Value;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -34,6 +35,7 @@ import java.util.*;
 
 import static java.lang.Math.round;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class BiometricService {
@@ -174,11 +176,21 @@ public class BiometricService {
         for (Person p : persons) {
 
             Map<String, Object> oficina = null;
-            Long oficinaSeq = p.getOficinaId();
+            String oficinaIdStr  = p.getOficinaId();
 
-            if (oficinaSeq != null) {
+            if (oficinaIdStr != null && !oficinaIdStr.isBlank()) {
+                ObjectId oficinaId = null;
 
-                    Optional<Office> opt = officeRepo.findByTenantIdAndSeq(tenantId, oficinaSeq);
+                try {
+                    oficinaId = new ObjectId(oficinaIdStr);
+                } catch (IllegalArgumentException ex) {
+                    log.warn("officeId inválido en persona {}: {}", p.getId(), oficinaIdStr);
+                }
+
+                if (oficinaId != null) {
+
+                    Optional<Office> opt =
+                            officeRepo.findByTenantIdAndId(tenantId, oficinaId);
 
                     if (opt.isPresent()) {
 
@@ -192,6 +204,7 @@ public class BiometricService {
                         oficina.put("estadoId",    o.getStateId());
                         oficina.put("municipioId", o.getMunicipalityId());
                     }
+                }
             }
 
             Map<String, Object> dto = new LinkedHashMap<>();
@@ -237,7 +250,7 @@ public class BiometricService {
         Map<String, Object> oficina = null;
         if (p.getOficinaId() != null && p.getTenantId() != null) {
             Office off = officeRepo
-                    .findByTenantIdAndSeq(p.getTenantId(), p.getOficinaId())
+                    .findByTenantIdAndId(p.getTenantId(), p.getTenantId())
                     .orElse(null);
 
             if (off != null) {
@@ -280,7 +293,7 @@ public class BiometricService {
                                    String sexo,
                                    String nacionalidad,
                                    String direccion,
-                                   Long oficinaId) {
+                                   String oficinaId) {
 
         if (curp == null || curp.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "curp_required");
@@ -289,12 +302,24 @@ public class BiometricService {
         String curpNorm = curp.trim().toUpperCase();
 
         // Validar Oficina
-        if (oficinaId != null) {
-            officeRepo.findByTenantIdAndSeq(tenantId, oficinaId)
+        if (oficinaId != null && !oficinaId.isBlank()) {
+
+            ObjectId officeObjectId;
+            try {
+                officeObjectId = new ObjectId(oficinaId);
+            } catch (IllegalArgumentException ex) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Oficina_id_invalido"
+                );
+            }
+
+            officeRepo.findByTenantIdAndId(tenantId, officeObjectId)
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.BAD_REQUEST,
                             "oficina_no_encontrada"
                     ));
+
         }
 
         // Buscar o crear persona por CURP

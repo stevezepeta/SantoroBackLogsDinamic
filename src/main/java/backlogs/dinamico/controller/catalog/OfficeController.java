@@ -5,6 +5,7 @@ import backlogs.dinamico.api.dto.OfficeResponse;
 import backlogs.dinamico.api.dto.OfficeUpdateRequest;
 import backlogs.dinamico.service.catalog.OfficeService;
 import lombok.RequiredArgsConstructor;
+import org.bson.types.ObjectId;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,7 +27,7 @@ public class OfficeController {
 
   /** GET por id numérico (seq) */
   @GetMapping("/{id}")
-  public OfficeResponse get(@PathVariable("id") Long id) {
+  public OfficeResponse get(@PathVariable("id") ObjectId id) {
     return service.getBySeq(id);
   }
 
@@ -39,13 +40,13 @@ public class OfficeController {
 
   /** PATCH/PUT -> actualiza por id numérico */
   @PatchMapping("/{id}")
-  public OfficeResponse update(@PathVariable("id") Long id, @RequestBody OfficeUpdateRequest patch) {
+  public OfficeResponse update(@PathVariable("id") ObjectId id, @RequestBody OfficeUpdateRequest patch) {
     return service.updateBySeq(id, patch);
   }
 
   @DeleteMapping("/{id}")
   @ResponseStatus(HttpStatus.NO_CONTENT)
-  public void delete(@PathVariable("id") Long id) {
+  public void delete(@PathVariable("id") ObjectId id) {
     service.deleteBySeq(id);
   }
 

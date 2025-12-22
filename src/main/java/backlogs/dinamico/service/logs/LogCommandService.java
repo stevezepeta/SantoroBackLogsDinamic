@@ -32,9 +32,10 @@ public class LogCommandService {
 
         // Validacion de la oficina
         if (req.officeId() != null) {
-            Long seq;
+            ObjectId officeId;
+
             try {
-                seq = Long.valueOf(req.officeId());
+                officeId = new ObjectId(req.officeId());
             } catch (NumberFormatException ex) {
                 throw new ResponseStatusException(
                         HttpStatus.BAD_REQUEST,
@@ -42,7 +43,7 @@ public class LogCommandService {
                 );
             }
 
-            officeRepo.findByTenantIdAndSeq(tenantId, seq)
+            officeRepo.findByTenantIdAndId(tenantId, officeId)
                     .orElseThrow(() -> new ResponseStatusException(
                             HttpStatus.BAD_REQUEST,
                             "oficina_no_encontrada"

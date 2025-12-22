@@ -35,7 +35,7 @@ public class EnrollCustomerController {
         String sexo = trim(req.sexo());
         String nacionalidad = trim(req.nacionalidad());
         String direccion = trim(req.direccion());
-        Long oficinaId = req.oficinaId();
+        String oficinaId = trim(req.oficinaId());
 
         if (curp.isBlank() || nombres.isBlank() || primerApellido.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of(
@@ -142,6 +142,6 @@ public class EnrollCustomerController {
             String sexo,
             String nacionalidad,
             String direccion,
-            Long oficinaId
+            String oficinaId
     ) {}
 }

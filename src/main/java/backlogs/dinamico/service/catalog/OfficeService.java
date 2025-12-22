@@ -51,7 +51,6 @@ public class OfficeService {
 
     Office entity = Office.builder()
             .tenantId(tenantId)
-            .seq(seq)
             .name(req.getName().trim())
             .address(req.getAddress().trim())
             .countryId(StringUtils.hasText(req.getCountryId()) ? req.getCountryId().trim() : null)
@@ -67,23 +66,23 @@ public class OfficeService {
 
   public List<OfficeResponse> listAllForOrg() {
     var tenantId = requireTenant();
-    return repo.findByTenantIdOrderBySeqAsc(tenantId)
+    return repo.findByTenantIdOrderByNameAsc(tenantId)
             .stream()
             .map(OfficeMapper::toResponse)
             .toList();
   }
 
-  public OfficeResponse getBySeq(Long id) {
+  public OfficeResponse getBySeq(ObjectId id) {
     var tenantId = requireTenant();
-    var office = repo.findByTenantIdAndSeq(tenantId, id)
+    var office = repo.findByTenantIdAndId(tenantId, id)
             .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "office_not_found"));
     return OfficeMapper.toResponse(office);
   }
 
-  public OfficeResponse updateBySeq(Long id, OfficeUpdateRequest patch) {
+  public OfficeResponse updateBySeq(ObjectId id, OfficeUpdateRequest patch) {
     var tenantId = requireTenant();
 
-    var current = repo.findByTenantIdAndSeq(tenantId, id)
+    var current = repo.findByTenantIdAndId(tenantId, id)
             .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "office_not_found"));
 
     if (StringUtils.hasText(patch.getName())) current.setName(patch.getName().trim());
@@ -97,11 +96,11 @@ public class OfficeService {
     return OfficeMapper.toResponse(current);
   }
 
-  public void deleteBySeq(Long id) {
+  public void deleteBySeq(ObjectId id) {
     var tenantId = requireTenant();
-    if (!repo.existsByTenantIdAndSeq(tenantId, id))
+    if (!repo.existsByTenantIdAndId(tenantId, id))
       throw new ResponseStatusException(NOT_FOUND, "office_not_found");
-    repo.deleteByTenantIdAndSeq(tenantId, id);
+    repo.deleteByTenantIdAndId(tenantId, id);
   }
 
 

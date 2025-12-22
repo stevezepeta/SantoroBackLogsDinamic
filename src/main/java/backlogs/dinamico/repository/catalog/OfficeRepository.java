@@ -10,11 +10,11 @@ import java.util.Optional;
 public interface OfficeRepository extends MongoRepository<Office, ObjectId> {
   boolean existsByTenantIdAndNameIgnoreCase(ObjectId tenantId, String name);
 
-  List<Office> findByTenantIdOrderBySeqAsc(ObjectId tenantId);
+  List<Office> findByTenantIdOrderByNameAsc(ObjectId tenantId);
 
-  Optional<Office> findByTenantIdAndSeq(ObjectId tenantId, Long seq);
+  Optional<Office> findByTenantIdAndId(ObjectId tenantId, ObjectId id);
 
-  boolean existsByTenantIdAndSeq(ObjectId tenantId, Long seq);
+  boolean existsByTenantIdAndId(ObjectId tenantId, ObjectId id);
 
-  void deleteByTenantIdAndSeq(ObjectId tenantId, Long seq);
+  void deleteByTenantIdAndId(ObjectId tenantId, ObjectId id);
 }

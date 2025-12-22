@@ -22,17 +22,18 @@ import java.util.List;
         @CompoundIndex(
                 name = "ix_office_tenant_org_name",
                 def = "{'tenant_id':1, 'name':1}",
-                unique = true),
-        @CompoundIndex(name = "ix_office_status", def = "{'status':1}")
+                unique = true
+        ),
+        @CompoundIndex(
+                name = "ix_office_status",
+                def = "{'status':1}"
+        )
 })
 public class Office extends BaseEntity {
 
     @Field("tenant_id")
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     private ObjectId tenantId;
-
-    @Field("seq")
-    private Long seq;
 
     private String name;
     private String address;
@@ -57,6 +58,10 @@ public class Office extends BaseEntity {
     public static class GeoPoint {
         private String type;
         private List<Double> coordinates;
+    }
+
+    public String getIdHex() {
+        return getId() != null ? getId().toHexString() : null;
     }
 
 }

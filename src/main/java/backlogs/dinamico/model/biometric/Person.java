@@ -44,7 +44,7 @@ public class Person {
 
     // Relacion con la oficina
     @Field("oficina_id")
-    private Long oficinaId;
+    private String oficinaId;
 
     @Field("face_photo")
     private String facePhotoPath; // ruta en el disco
