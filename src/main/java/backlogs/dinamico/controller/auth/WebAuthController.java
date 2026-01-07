@@ -124,10 +124,9 @@ public class WebAuthController {
             ObjectId tenantId = new ObjectId(tenantIdHex);
 
             User user = userService.findByEmail(tenantId, email)
-                    .orElseThrow(() -> new IllegalStateException("User not found"));
+                    .orElseThrow(() -> new IllegalStateException("User not found for refresh token"));
 
             String newAccessToken = tokens.generate(user, null, tenantId);
-
             String refreshToken = req.refreshToken();
 
             LoginResponse resp = new LoginResponse(newAccessToken, refreshToken, "Bearer");
@@ -136,9 +135,13 @@ public class WebAuthController {
                     ApiResponse.success("Token refreshed", resp)
             );
 
-        } catch (JwtException ex) {
-            return ResponseEntity.status(400)
-                    .body(ApiResponse.error("invalid_refresh_token",  ex.getMessage(), null));
+        } catch (JwtException | IllegalArgumentException | IllegalStateException ex) {
+            return ResponseEntity.status(UNAUTHORIZED)
+                    .body(ApiResponse.error(
+                            "invalid_refresh_token",
+                            ex.getMessage(),
+                            null
+                    ));
         }
 
     }

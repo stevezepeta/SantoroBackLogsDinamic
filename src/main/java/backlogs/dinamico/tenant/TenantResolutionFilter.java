@@ -1,5 +1,7 @@
 package backlogs.dinamico.tenant;
 
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -117,8 +119,34 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
                         log.info("[ORG] JWT sin organizationId/orgId/org/organization_id");
                     }
 
+                } catch (ExpiredJwtException ex) {
+                    log.warn("[TENANT] JWT expirado: {}", ex.getMessage());
+                    writeUnauthorizedJson(
+                            res,
+                            req,
+                            "access_token_expired",
+                            "El token de acceso ha expirado"
+                    );
+                    return;
+                } catch (JwtException ex) {
+                    log.warn("[TENANT] JWT inválido: {}: {}", ex.getClass().getSimpleName(), ex.getMessage());
+                    writeUnauthorizedJson(
+                            res,
+                            req,
+                            "invalid_access_token",
+                            "El token de acceso es inválido"
+                    );
+                    return;
                 } catch (Exception ex) {
-                    log.error("[TENANT] Error parseando JWT: {}: {}", ex.getClass().getSimpleName(), ex.getMessage());
+                    log.error("[TENANT] Error parseando JWT: {}: {}",
+                            ex.getClass().getSimpleName(), ex.getMessage());
+                    writeUnauthorizedJson(
+                            res,
+                            req,
+                            "invalid_access_token",
+                            "No fue posible procesar el token de acceso"
+                    );
+                    return;
                 }
             }
 
@@ -146,5 +174,25 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
         } finally {
             TenantContext.clear();
         }
+    }
+
+    private void writeUnauthorizedJson(HttpServletResponse res,
+                                       HttpServletRequest req,
+                                       String code,
+                                       String message) throws IOException {
+        res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        res.setContentType("application/json;charset=UTF-8");
+
+        String body = """
+                {
+                  "ok": false,
+                  "code": "%s",
+                  "message": "%s",
+                  "path": "%s"
+                }
+                """.formatted(code, message, req.getRequestURI());
+
+        res.getWriter().write(body);
+        res.getWriter().flush();
     }
 }

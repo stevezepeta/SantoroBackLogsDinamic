@@ -20,6 +20,7 @@ import org.springframework.util.StringUtils;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.*;
@@ -69,30 +70,41 @@ public class PassportOverviewService {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
-        Criteria baseCriteria = Criteria.where("tenantId").is(tenantId)
-                .and("system").is(PASSPORT_SYSTEM)
-                .and("eventTime").gte(from).lte(to);
+        // Criteria dinamico
+        List<Criteria> criteriaList = new ArrayList<>();
+        criteriaList.add(Criteria.where("tenantId").is(tenantId));
+        criteriaList.add(Criteria.where("system").is(PASSPORT_SYSTEM));
+
+        // Fechas solo si vienen
+        if (from != null || to != null) {
+            Criteria time = Criteria.where("eventTime");
+            if (from != null) time = time.gte(from);
+            if (to != null) time = time.lt(to);
+            criteriaList.add(time);
+        }
 
         if (StringUtils.hasText(officeId)) {
-            baseCriteria = baseCriteria.and("office.officeId").is(officeId);
+            criteriaList.add(Criteria.where("office.officeId").is(officeId));
         }
 
         if (StringUtils.hasText(userId)) {
-            baseCriteria = baseCriteria.and("user.userId").is(userId);
+            criteriaList.add(Criteria.where("user.userId").is(userId));
         }
 
         if (StringUtils.hasText(channel)) {
-            baseCriteria = baseCriteria.and("channel").is(channel);
+            criteriaList.add(Criteria.where("channel").is(channel));
         }
 
         if (StringUtils.hasText(operationType)) {
-            baseCriteria = baseCriteria.and("operationType").is(operationType);
+            criteriaList.add(Criteria.where("operationType").is(operationType));
         }
 
         if (StringUtils.hasText(status)) {
             String normalizedStatus = normalizeStatusFilter(status);
-            baseCriteria = baseCriteria.and("status").is(normalizedStatus);
+            criteriaList.add(Criteria.where("status").is(normalizedStatus));
         }
+
+        Criteria baseCriteria = new Criteria().andOperator(criteriaList.toArray(new Criteria[0]));
 
         // Totales por status
         Aggregation totalsAgg = newAggregation(

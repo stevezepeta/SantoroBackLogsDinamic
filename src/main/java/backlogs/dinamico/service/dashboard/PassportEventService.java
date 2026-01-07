@@ -8,9 +8,11 @@ import backlogs.dinamico.model.passport.PassportEvent;
 import backlogs.dinamico.repository.catalog.OfficeRepository;
 import backlogs.dinamico.repository.core.UserRepository;
 import backlogs.dinamico.repository.passport.PassportEventRepository;
+import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -18,13 +20,16 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.text.Normalizer;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
@@ -139,58 +144,92 @@ public class PassportEventService {
 
 
     // Busqueda con filtros + paginacion
-    public PageResult<PassportEvent> searchEvents(
-            ObjectId tenantId,
-            String status,
-            String operationType,
+    public Page<PassportEvent> searchEvents(
             Instant from,
             Instant to,
+            String status,
+            String operationType,
+            String officeId,
+            String userId,
+            String channel,
+            String messageContains,
+            String reasonCode,
             int page,
             int size,
-            Sort.Direction direction
+            String sortBy,
+            String sortDir
     ) {
 
-        Query query = new Query();
-        query.addCriteria(Criteria.where("tenantId").is(tenantId));
+        var tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new IllegalArgumentException("Token no valido");
+        }
 
-        // Normalizamos a MAYUSCULAS
+        List<Criteria> criteriaList = new ArrayList<>();
+
+        // Siempre se filtra por tenant
+        criteriaList.add(Criteria.where("tenantId").is(tenantId));
+        criteriaList.add(Criteria.where("system").is("PASSPORT_PA"));
+        criteriaList.add(Criteria.where("eventTime").gte(from).lte(to));
+
         if (status != null && !status.isBlank()) {
-            String normalized = status.trim().toUpperCase();
-            query.addCriteria(Criteria.where("status").is(normalized));
+            criteriaList.add(Criteria.where("status").is(status));
         }
 
         if (operationType != null && !operationType.isBlank()) {
-            String normalized = operationType.trim().toUpperCase();
-            query.addCriteria(Criteria.where("operationType").is(normalized));
+            criteriaList.add(Criteria.where("operationType").is(operationType));
         }
 
-        if (from != null && to != null) {
-            query.addCriteria(Criteria.where("eventTime").gte(from).lt(to));
-        } else if (from != null) {
-            query.addCriteria(Criteria.where("eventTime").gte(from));
-        } else if (to != null) {
-            query.addCriteria(Criteria.where("eventTime").lt(to));
+        if (officeId != null && !officeId.isBlank()) {
+            criteriaList.add(Criteria.where("office.officeId").is(officeId));
         }
 
-        PageRequest pageable = PageRequest.of(page, size, Sort.by(direction, "eventTime"));
-        query.with(pageable);
+        if (userId != null && !userId.isBlank()) {
+            criteriaList.add(Criteria.where("user.userId").is(userId));
+        }
 
-        long total = mongoTemplate.count(query, PassportEvent.class);
-        List<PassportEvent> items = mongoTemplate.find(query, PassportEvent.class);
+        if (channel != null && !channel.isBlank()) {
+            criteriaList.add(Criteria.where("channel").is(channel));
+        }
 
-        int totalPages = (int) Math.ceil((double) total / size);
-        boolean hasNext = (page + 1) < totalPages;
-        boolean hasPrevious = page > 0;
+        if (messageContains != null && !messageContains.isBlank()) {
+            // regex case-insensitive: .*texto.*
+            Pattern pattern = Pattern.compile(
+                    ".*" + Pattern.quote(messageContains) + ".*",
+                    Pattern.CASE_INSENSITIVE
+            );
+            criteriaList.add(Criteria.where("message").regex(pattern));
+        }
 
-        return new PageResult<>(
-                items,
-                page,
-                size,
-                total,
-                totalPages,
-                hasNext,
-                hasPrevious
+        if (StringUtils.hasText(reasonCode)) {
+            criteriaList.add(
+                    Criteria.where("reason.code").is(reasonCode.toUpperCase())
+            );
+        }
+
+        Criteria criteria = new Criteria().andOperator(criteriaList.toArray(new Criteria[0]));
+        Query query = new Query(criteria);
+
+        // Order
+        Sort.Direction direction = "ASC".equalsIgnoreCase(sortDir)
+                ? Sort.Direction.ASC
+                : Sort.Direction.DESC;
+
+        String sortField = (sortBy != null && !sortBy.isBlank())
+                ? sortBy
+                : "eventTime";
+
+        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(direction, sortField));
+        query.with(pageRequest);
+
+        List<PassportEvent> items = mongoTemplate.find(query, PassportEvent.class, "passport_events");
+
+        long total = mongoTemplate.count(
+                Query.of(query).limit(-1).skip(-1),
+                "passport_events"
         );
+
+        return new PageImpl<>(items, pageRequest, total);
     }
 
     public Optional<PassportEvent> findById(ObjectId tenantId, ObjectId id) {

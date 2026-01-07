@@ -2,14 +2,12 @@ package backlogs.dinamico.controller.dashboard;
 
 import backlogs.dinamico.api.ApiResponse;
 import backlogs.dinamico.api.dto.common.PageResult;
-import backlogs.dinamico.api.dto.passport.PassportEventCreateReq;
-import backlogs.dinamico.api.dto.passport.PassportSummaryResponse;
-import backlogs.dinamico.api.dto.passport.PassportsByOfficeItem;
-import backlogs.dinamico.api.dto.passport.PassportsByTypeItem;
+import backlogs.dinamico.api.dto.passport.*;
 import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.model.passport.PassportEvent;
 import backlogs.dinamico.service.dashboard.PassportEventService;
 import backlogs.dinamico.service.dashboard.PassportOverviewService;
+import backlogs.dinamico.service.dashboard.PassportTimelineService;
 import backlogs.dinamico.tenant.TenantContext;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +34,7 @@ public class PassportDashboardController {
 
     private final PassportOverviewService passportOverviewService;
     private final PassportEventService passportEventService;
+    private final PassportTimelineService timelineService;
 
     @PostMapping("/events")
     public ApiResponse<?> createEvent(@Valid @RequestBody PassportEventCreateReq req,
@@ -80,17 +79,27 @@ public class PassportDashboardController {
             String channel,
             @RequestParam(required = false)
             String operationType,
-            @RequestParam(required = false)
-            String status
+
+            @RequestParam(name = "status", required = false)
+            String status,
+            @RequestParam(name = "dbStatus", required = false)
+            String dbStatus
     ) {
+        // Normalizacion de los String
+        officeId = normalize(officeId);
+        userId = normalize(userId);
+        channel = normalize(channel);
+        operationType = normalize(operationType);
+
+        String finalStatus = normalize(dbStatus != null ? dbStatus : status);
 
         Instant from = (fromDate != null)
                 ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
-                : PassportOverviewService.defaultFrom();
+                : null;
 
         Instant to = (toDate != null)
                 ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
-                : PassportOverviewService.defaultTo();
+                : null;
 
         PassportSummaryResponse data = passportOverviewService.getSummary(
                 from,
@@ -99,7 +108,7 @@ public class PassportDashboardController {
                 userId,
                 channel,
                 operationType,
-                status
+                finalStatus
         );
 
         return ApiResponse.ok(
@@ -107,6 +116,14 @@ public class PassportDashboardController {
                 "passports_summary",
                 data
         );
+    }
+
+    private String normalize(String v) {
+        if (v == null) return null;
+        v = v.trim();
+        if (v.isEmpty()) return null;
+        if ("null".equalsIgnoreCase(v)) return null;
+        return v;
     }
 
     /*
@@ -177,22 +194,28 @@ public class PassportDashboardController {
 
     // GET - ALL
     @GetMapping("/events")
-    public ApiResponse<PageResult<PassportEvent>> getAllEvents(@RequestParam(defaultValue = "0") int page,
-                                                               @RequestParam(defaultValue = "10") int size,
-                                                               @RequestParam(defaultValue = "DESC") String sortDir,
+    public ApiResponse<Map<String, Object>> searchEvents(@RequestParam(defaultValue = "0") int page,
+                                                         @RequestParam(defaultValue = "10") int size,
+                                                         @RequestParam(defaultValue = "DESC") String sortDir,
+                                                         @RequestParam(required = false) String sortBy,
 
-                                                               @RequestParam(required = false) String status,
-                                                               @RequestParam(required = false) String operationType,
+                                                         @RequestParam(required = false) String status,
+                                                         @RequestParam(required = false) String operationType,
 
-                                                               @RequestParam(required = false)
-                                                                   @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-                                                                   LocalDate fromDate,
+                                                         @RequestParam(required = false) String officeId,
+                                                         @RequestParam(required = false) String userId,
+                                                         @RequestParam(required = false) String channel,
+                                                         @RequestParam(required = false) String message,
 
-                                                               @RequestParam(required = false)
-                                                                       @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-                                                                       LocalDate toDate,
+                                                         @RequestParam(required = false) String reasonCode,
 
-                                                               Authentication auth) {
+                                                         @RequestParam(required = false)
+                                                             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+
+                                                         @RequestParam(required = false)
+                                                             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+
+                                                         Authentication auth) {
 
         ObjectId tenantId = resolveTenantId(auth);
 
@@ -200,32 +223,42 @@ public class PassportDashboardController {
                 ? Sort.Direction.ASC
                 : Sort.Direction.DESC;
 
-        Instant from = null;
-        Instant to = null;
+        Instant from = (fromDate != null)
+                ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
+                : PassportOverviewService.defaultFrom();
 
-        if (fromDate != null) {
-            from = fromDate.atStartOfDay().toInstant(ZoneOffset.UTC);
-        }
-        if (toDate != null) {
-            to = toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        }
+        Instant to = (toDate != null)
+                ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                : PassportOverviewService.defaultTo();
 
-        PageResult<PassportEvent> events =
-                passportEventService.searchEvents(
-                        tenantId,
-                        status,
-                        operationType,
-                        from,
-                        to,
-                        page,
-                        size,
-                        direction
-                );
+        var pageResult = passportEventService.searchEvents(
+                from,
+                to,
+                status,
+                operationType,
+                officeId,
+                userId,
+                channel,
+                message,
+                reasonCode,
+                page,
+                size,
+                sortBy,
+                sortDir
+        );
+
+        Map<String, Object> data = Map.of(
+                "items", pageResult.getContent(),
+                "page", pageResult.getNumber(),
+                "size", pageResult.getSize(),
+                "totalElements", pageResult.getTotalElements(),
+                "totalPages", pageResult.getTotalPages()
+        );
 
         return ApiResponse.ok(
                 "Logs de pasaportes",
-                "passport_events_all",
-                events
+                "passport_events_search",
+                data
         );
     }
 
@@ -248,6 +281,47 @@ public class PassportDashboardController {
         );
 
     }
+
+    @GetMapping("/timeline")
+    public ApiResponse<PassportTimelineResponse> getTimeline(
+            @RequestParam(required = false) String passportNumber,
+            @RequestParam(required = false) String personId,
+            @RequestParam(required = false) String requestId,
+
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate
+    ) {
+
+        Instant from = null;
+        Instant to = null;
+
+        if (fromDate != null) {
+            from = fromDate.atStartOfDay().toInstant(ZoneOffset.UTC);
+        }
+        if (toDate != null) {
+            to = toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        }
+
+        PassportTimelineResponse data = timelineService.getTimeline(
+                passportNumber,
+                personId,
+                requestId,
+                from,
+                to
+        );
+
+        return ApiResponse.ok(
+                "passports_timeline",
+                "Timeline de eventos de pasaporte",
+                data
+        );
+
+    }
+
+
 
     private ObjectId resolveTenantId(Authentication auth) {
 
