@@ -1,20 +1,23 @@
 package backlogs.dinamico.tenant;
 
-import lombok.Builder;
-import lombok.Getter;
-import lombok.Setter;
+import lombok.*;
 import org.bson.types.ObjectId;
 
 public final class TenantContext {
 
     // Contexto por request (ThreadLocal) con valor por defecto vacío
-    private static final ThreadLocal<Ctx> CURRENT = ThreadLocal.withInitial(Ctx::new);
+    private static final ThreadLocal<Ctx> CURRENT = ThreadLocal.withInitial(Ctx::empty);
 
     private TenantContext() {}
 
     /** Datos del contexto (amplíalo si lo necesitas). */
-    @Getter @Setter @Builder
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder(toBuilder = true)
     public static class Ctx {
+
         // --- mínimos / multitenant ---
         private ObjectId tenantId;
         private ObjectId organizationId;
@@ -31,38 +34,7 @@ public final class TenantContext {
         private String   dbName;
         private String   collectionSuffix;
 
-        public Ctx() {}
-        public Ctx(ObjectId tenantId) { this.tenantId = tenantId; }
-
-        @Deprecated
-        public Ctx(ObjectId tenantId, ObjectId userId, ObjectId personId, String email, String name,
-                   ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
-            this.tenantId = tenantId;
-            this.userId = userId;
-            this.personId = personId;
-            this.email = email;
-            this.name = name;
-            this.systemId = systemId;
-            this.environmentId = environmentId;
-            this.dbName = dbName;
-            this.collectionSuffix = collectionSuffix;
-            this.organizationId = null;
-        }
-
-        @Deprecated
-        public Ctx(ObjectId tenantId, ObjectId organizationId, ObjectId userId, ObjectId personId, String email, String name,
-                   ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
-            this.tenantId = tenantId;
-            this.organizationId = organizationId;
-            this.userId = userId;
-            this.personId = personId;
-            this.email = email;
-            this.name = name;
-            this.systemId = systemId;
-            this.environmentId = environmentId;
-            this.dbName = dbName;
-            this.collectionSuffix = collectionSuffix;
-        }
+        static Ctx empty() { return new Ctx(); }
 
         public boolean hasTenant() { return tenantId != null; }
     }
@@ -70,20 +42,19 @@ public final class TenantContext {
     // ------------ API básica ------------
     /** Establece todo el contexto. */
     public static void set(Ctx ctx) {
-        CURRENT.set(ctx != null ? ctx : new Ctx());
-    }
-    public static void set(ObjectId tenantId) {
-        CURRENT.set(new Ctx(tenantId));
+        CURRENT.set(ctx != null ? ctx : Ctx.empty());
     }
 
     public static Ctx get() {
         return CURRENT.get();
     }
+
+    /** Limpia el contexto del request actual. */
     public static void clear() {
         CURRENT.remove();
     }
 
-    // ------------ Helpers convenientes ------------
+    // ------------ Tenant helpers ------------
     public static void setTenantId(ObjectId id) {
         CURRENT.get().setTenantId(id);
     }
@@ -92,18 +63,31 @@ public final class TenantContext {
         return CURRENT.get().getTenantId();
     }
 
-    // tenantId como hex
+    /** Útil para evitar repetir validaciones en services. */
+    public static ObjectId requireTenantId() {
+        ObjectId id = getTenantId();
+        if (id == null) throw new IllegalStateException("Tenant no resuelto en contexto");
+        return id;
+    }
+
     public static void setTenantIdHex(String hex) {
         if (hex != null && ObjectId.isValid(hex)) setTenantId(new ObjectId(hex));
     }
+
     public static String getTenantIdHex() {
         ObjectId id = getTenantId();
         return (id != null) ? id.toHexString() : null;
     }
 
-    // ------- OrganizationId Helpers ------
-    public static void setOrganizationId(ObjectId id) { CURRENT.get().setOrganizationId(id); }
-    public static ObjectId getOrganizationId() { return CURRENT.get().getOrganizationId(); }
+    // ------- OrganizationId helpers ------
+    public static void setOrganizationId(ObjectId id) {
+        CURRENT.get().setOrganizationId(id);
+    }
+
+    public static ObjectId getOrganizationId() {
+        return CURRENT.get().getOrganizationId();
+    }
+
     public static void setOrganizationIdHex(String hex) {
         if (hex != null && ObjectId.isValid(hex)) setOrganizationId(new ObjectId(hex));
     }
@@ -113,44 +97,46 @@ public final class TenantContext {
         return (id != null) ? id.toHexString() : null;
     }
 
+    // ------------ System/Environment helpers ------------
     public static void setSystemId(ObjectId id) {
         CURRENT.get().setSystemId(id);
     }
+
     public static ObjectId getSystemId() {
         return CURRENT.get().getSystemId();
     }
+
     public static void setEnvironmentId(ObjectId id) {
         CURRENT.get().setEnvironmentId(id);
     }
+
     public static ObjectId getEnvironmentId() {
         return CURRENT.get().getEnvironmentId();
     }
+
+    // ------------ Routing helpers (db/collection) ------------
     public static void setDbName(String db) {
         CURRENT.get().setDbName(db);
     }
+
     public static String getDbName() {
         return CURRENT.get().getDbName();
     }
+
     public static void setCollectionSuffix(String s) {
         CURRENT.get().setCollectionSuffix(s);
     }
+
     public static String getCollectionSuffix() {
         return CURRENT.get().getCollectionSuffix();
     }
 
-    public static void set(ObjectId tenantId, ObjectId organizationId, ObjectId userId, ObjectId personId, String email, String name,
-                           ObjectId systemId, ObjectId environmentId, String dbName, String collectionSuffix) {
-        CURRENT.set(Ctx.builder()
+    // ------------ Convenience: set rápido para ingesta (API Key) ------------
+    public static void setForIngest(ObjectId tenantId, ObjectId systemId, ObjectId environmentId) {
+        set(Ctx.builder()
                 .tenantId(tenantId)
-                .organizationId(organizationId)
-                .userId(userId)
-                .personId(personId)
-                .email(email)
-                .name(name)
                 .systemId(systemId)
                 .environmentId(environmentId)
-                .dbName(dbName)
-                .collectionSuffix(collectionSuffix)
                 .build());
     }
 }

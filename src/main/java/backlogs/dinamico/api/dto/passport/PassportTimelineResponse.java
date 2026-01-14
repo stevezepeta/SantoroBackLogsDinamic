@@ -1,6 +1,5 @@
 package backlogs.dinamico.api.dto.passport;
 
-import io.jsonwebtoken.Header;
 
 import java.time.Instant;
 import java.util.List;
@@ -12,6 +11,7 @@ public record PassportTimelineResponse(
 
     // Info fija del pasaporte
     public record Header(
+            String caseId,
             String passportNumber,
             String personId,
             String fullName,

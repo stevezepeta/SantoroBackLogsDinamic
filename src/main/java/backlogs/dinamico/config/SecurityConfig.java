@@ -37,8 +37,6 @@ public class SecurityConfig {
     @Value("${security.basic.enabled:false}")
     private boolean basicEnabled;
 
-    @Value("${security.catalogs.protect-writes:false}")
-    private boolean protectCatalogWrites;
 
     private final ObjectProvider<ApiKeyTenantFilter> apiKeyTenantFilterProvider;
     private final JwtAuthFilter jwtAuthFilter;
@@ -49,8 +47,8 @@ public class SecurityConfig {
 
     @PostConstruct
     void logFlags() {
-        log.info("Security flags -> requireApiKey={}, basicEnabled={}, protectCatalogWrites={}",
-                requireApiKey, basicEnabled, protectCatalogWrites);
+        log.info("Security flags -> requireApiKey={}, basicEnabled={}",
+                requireApiKey, basicEnabled);
     }
 
     @Bean
@@ -61,29 +59,13 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> {
 
-                    // ==== Rutas públicas ====
                     auth.requestMatchers("/error", "/actuator/**").permitAll();
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
 
-                    // Ingest y Biometria abiertos
-                    auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
-                    auth.requestMatchers("/api/ingest/**").permitAll();
-
-                    // Biografico sin login
-                    auth.requestMatchers(HttpMethod.POST,
-                            "/api/enrollCustomer/enroll/biographic"
-                    ).permitAll();
-
-                    auth.requestMatchers(HttpMethod.GET, "/api/enrollCustomer/enroll/persons/**").permitAll();
-
-                    // Catálogos públicos
-                    auth.requestMatchers(HttpMethod.GET, "/api/catalogs/**").permitAll();
-
+                    // WS
                     auth.requestMatchers("/ws/**").permitAll();
 
-                    auth.requestMatchers(HttpMethod.GET, "/api/auth/qr-token").permitAll();
-
-                    // Auth público (web) que NO requiere estar logueado
+                    // Auth público
                     auth.requestMatchers(HttpMethod.POST,
                             "/api/auth/login",
                             "/api/auth/refresh",
@@ -91,25 +73,31 @@ public class SecurityConfig {
                             "/api/auth/forgot-password",
                             "/api/auth/reset-password"
                     ).permitAll();
-
-                    // QR login desde el celular: aquí SÍ debe venir JWT del usuario
+                    auth.requestMatchers(HttpMethod.GET, "/api/auth/qr-token").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/qr-login").authenticated();
 
-                    // Crear PRIMER admin del tenant (sin token)
+                    // Bootstrap
                     auth.requestMatchers(HttpMethod.POST, "/api/core/bootstrap-admin").permitAll();
-
-                    // Permite crear organization sin token ni X-Tenant
                     auth.requestMatchers(HttpMethod.POST, "/api/catalogs/organizations").permitAll();
 
-                    // ==== Reglas condicionales (antes de anyRequest) ====
-                    if (protectCatalogWrites) {
-                        auth.requestMatchers(HttpMethod.POST,   "/api/catalogs/**").authenticated();
-                        auth.requestMatchers(HttpMethod.PUT,    "/api/catalogs/**").authenticated();
-                        auth.requestMatchers(HttpMethod.PATCH,  "/api/catalogs/**").authenticated();
-                        auth.requestMatchers(HttpMethod.DELETE, "/api/catalogs/**").authenticated();
-                    } else {
-                        auth.requestMatchers("/api/catalogs/**").permitAll();
-                    }
+                    // Ingest por API-KEY (permitAll aquí; ApiKeyTenantFilter lo protege)
+                    auth.requestMatchers(HttpMethod.POST, "/api/ingest/**").permitAll();
+                    auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
+                    auth.requestMatchers(HttpMethod.POST, "/api/logs/events").permitAll();
+
+                    // Ingest universal por API-KEY (sin JWT)
+                    auth.requestMatchers(HttpMethod.POST, "/api/logs", "/api/logs/events").permitAll();
+
+                    // Logs: lectura siempre con JWT
+                    auth.requestMatchers("/api/logs/**")
+                            .hasAnyRole("ADMIN","TENANT_OWNER","EXEC","OPS","SUPPORT","AUDITOR");
+
+                    // ingest se queda como ya lo tienes (permitAll por API-KEY)
+                    auth.requestMatchers(HttpMethod.POST, "/api/logs/events").permitAll();
+
+                    // Catálogos: autenticados (mínimas excepciones ya arriba)
+                    auth.requestMatchers("/api/catalogs/**")
+                            .hasAnyRole("ADMIN","TENANT_OWNER","EXEC","OPS","SUPPORT","AUDITOR");
 
                     // ==== Zonas por rol ====
                     auth.requestMatchers("/api/admin/**").hasRole("ADMIN");
@@ -156,6 +144,7 @@ public class SecurityConfig {
                 "Authorization",
                 "Content-Type",
                 "X-API-Key",
+                "X-Api-Key",
                 "X-Tenant", "X-Tenant-Id",
                 "X-Org-Code", "X-Org-Slug", "X-Org-Domain",
                 "X-System-Id", "X-Environment-Id",

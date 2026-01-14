@@ -1,7 +1,5 @@
 package backlogs.dinamico.tenant;
 
-import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,12 +12,10 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.stereotype.Component;
+import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
-import io.jsonwebtoken.Jwts;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -30,24 +26,18 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
     @Value("${multitenant.header.tenant:X-Tenant}")
     private String tenantHeaderName;
 
-    // Falback opcional este es para pruebas
+    // Fallback opcional (útil si tu front manda org explícito)
     @Value("${multitenant.header.organization:X-Organization-Id}")
     private String organizationHeaderName;
 
-    @Value("${security.jwt.secret:}")
-    private String jwtSecret;
+    // Variantes comunes (por si Postman/clients mandan distinto)
+    private static final String[] TENANT_HEADERS = {"X-Tenant", "X-Tenant-Id"};
+    private static final String[] ORG_HEADERS = {"X-Organization-Id", "X-Org-Id", "X-Org"};
 
     private static final String[] PUBLIC_PATHS = {
-            "/api/auth/login",
-            "/api/auth/accept-invite",
-            "/api/auth/forgot-password",
-            "/api/auth/reset-password",
-            "/api/core/bootstrap-admin",
-            "/actuator/health",
-
-            "/api/auth/qr-token",
-            "/api/auth/refresh",
-
+            "/error",
+            "/actuator",
+            "/api/auth",
             "/ws"
     };
 
@@ -56,12 +46,15 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
         String uri = request.getRequestURI();
         String method = request.getMethod();
 
+        // OPTIONS siempre bypass
+        if (HttpMethod.OPTIONS.matches(method)) return true;
+
+        // Rutas públicas por prefijo
         for (String p : PUBLIC_PATHS) {
-            if (uri.startsWith(p)) {
-                return true;
-            }
+            if (uri.startsWith(p)) return true;
         }
 
+        // Crear organizations público
         if ("/api/catalogs/organizations".equals(uri) && HttpMethod.POST.matches(method)) {
             return true;
         }
@@ -73,126 +66,62 @@ public class TenantResolutionFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest req,
                                     HttpServletResponse res,
                                     FilterChain chain) throws ServletException, IOException {
+
         try {
-            String bearer = req.getHeader("Authorization");
-            String tokenPreview = (bearer != null && bearer.startsWith("Bearer "))
-                    ? bearer.substring(7, Math.min(bearer.length(), 7 + 20)) + "…"
-                    : "none";
+            // 1) Resolver tenantId desde headers (NO JWT aquí)
+            if (TenantContext.getTenantId() == null) {
+                String tenantHex = firstNonBlank(
+                        req.getHeader(tenantHeaderName),
+                        headerAny(req, TENANT_HEADERS)
+                );
 
-            log.info("[TENANT-RESOLVER] path={}, authBearer={}", req.getRequestURI(), tokenPreview);
-            log.info("[JWT-PARSE] secret.len={} hash={}",
-                    jwtSecret == null ? 0 : jwtSecret.getBytes(StandardCharsets.UTF_8).length,
-                    jwtSecret == null ? 0 : jwtSecret.hashCode());
-
-            // 1) Intentar Authorization: Bearer <token>
-            if (bearer != null && bearer.startsWith("Bearer ") && jwtSecret != null && !jwtSecret.isBlank()) {
-                String token = bearer.substring(7);
-                try {
-                    var claims = Jwts.parser()
-                            .setSigningKey(jwtSecret.getBytes(StandardCharsets.UTF_8))
-                            .parseClaimsJws(token)
-                            .getBody();
-
-                    String claimKeys = claims.keySet().stream().collect(Collectors.joining(","));
-                    log.info("[TENANT-RESOLVER] JWT claims keys={}", claimKeys);
-
-                    Object t = claims.get("tenantId");
-                    if (t != null && ObjectId.isValid(t.toString())) {
-                        TenantContext.setTenantIdHex(t.toString());
-                        log.info("[TENANT] Resuelto desde JWT: {}", t);
-                    } else {
-                        log.warn("[TENANT] JWT sin claim tenantId válido. tenantId={}", t);
-                    }
-
-                    // organizationId: soporta varios nombres de claim
-                    Object orgClaim = claims.get("tenantId");
-                    if (orgClaim == null) orgClaim = claims.get("orgId");
-                    if (orgClaim == null) orgClaim = claims.get("org");
-                    if (orgClaim == null) orgClaim = claims.get("organization_id");
-
-                    if (orgClaim != null && ObjectId.isValid(orgClaim.toString())) {
-                        TenantContext.setOrganizationIdHex(orgClaim.toString());
-                        log.info("[ORG] Resuelto organizationId desde JWT: {}", orgClaim);
-                    } else if (orgClaim != null) {
-                        log.warn("[ORG] Claim organizationId presente pero inválido: {}", orgClaim);
-                    } else {
-                        log.info("[ORG] JWT sin organizationId/orgId/org/organization_id");
-                    }
-
-                } catch (ExpiredJwtException ex) {
-                    log.warn("[TENANT] JWT expirado: {}", ex.getMessage());
-                    writeUnauthorizedJson(
-                            res,
-                            req,
-                            "access_token_expired",
-                            "El token de acceso ha expirado"
-                    );
-                    return;
-                } catch (JwtException ex) {
-                    log.warn("[TENANT] JWT inválido: {}: {}", ex.getClass().getSimpleName(), ex.getMessage());
-                    writeUnauthorizedJson(
-                            res,
-                            req,
-                            "invalid_access_token",
-                            "El token de acceso es inválido"
-                    );
-                    return;
-                } catch (Exception ex) {
-                    log.error("[TENANT] Error parseando JWT: {}: {}",
-                            ex.getClass().getSimpleName(), ex.getMessage());
-                    writeUnauthorizedJson(
-                            res,
-                            req,
-                            "invalid_access_token",
-                            "No fue posible procesar el token de acceso"
-                    );
-                    return;
-                }
-            }
-
-            // 2) Fallback: header X-Tenant
-            if (TenantContext.getTenantIdHex() == null) {
-                String tenantHex = req.getHeader(tenantHeaderName);
-                if (tenantHex != null && ObjectId.isValid(tenantHex)) {
+                if (StringUtils.hasText(tenantHex) && ObjectId.isValid(tenantHex)) {
                     TenantContext.setTenantIdHex(tenantHex);
-                    log.info("[TENANT] Resuelto desde header {}: {}", tenantHeaderName, tenantHex);
-                } else if (tenantHex != null) {
-                    log.warn("[TENANT] Header {} presente pero inválido: {}", tenantHeaderName, tenantHex);
+                    log.debug("[TENANT] resolved from header: {}", tenantHex);
+                } else if (StringUtils.hasText(tenantHex)) {
+                    log.warn("[TENANT] header present but invalid ObjectId: {}", tenantHex);
                 }
             }
 
-            // 3) Fallback opcional: header de organización (útil si el token aún no trae el claim)
+            // 2) Resolver organizationId desde headers
             if (TenantContext.getOrganizationId() == null) {
-                String orgHex = req.getHeader(organizationHeaderName);
-                if (orgHex != null && ObjectId.isValid(orgHex)) {
+                String orgHex = firstNonBlank(
+                        req.getHeader(organizationHeaderName),
+                        headerAny(req, ORG_HEADERS)
+                );
+
+                if (StringUtils.hasText(orgHex) && ObjectId.isValid(orgHex)) {
                     TenantContext.setOrganizationIdHex(orgHex);
-                    log.info("[ORG] Resuelto organizationId desde header {}: {}", organizationHeaderName, orgHex);
+                    log.debug("[ORG] resolved from header: {}", orgHex);
+                } else if (StringUtils.hasText(orgHex)) {
+                    log.warn("[ORG] header present but invalid ObjectId: {}", orgHex);
                 }
+            }
+
+            // 3) Compat: si no hay organizationId pero sí tenantId, usa el mismo
+            if (TenantContext.getOrganizationId() == null && TenantContext.getTenantId() != null) {
+                TenantContext.setOrganizationId(TenantContext.getTenantId());
             }
 
             chain.doFilter(req, res);
+
         } finally {
+            // Limpieza (ThreadLocal) al terminar el request completo
             TenantContext.clear();
         }
     }
 
-    private void writeUnauthorizedJson(HttpServletResponse res,
-                                       HttpServletRequest req,
-                                       String code,
-                                       String message) throws IOException {
-        res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        res.setContentType("application/json;charset=UTF-8");
+    private static String headerAny(HttpServletRequest req, String[] names) {
+        for (String n : names) {
+            String v = req.getHeader(n);
+            if (StringUtils.hasText(v)) return v;
+        }
+        return null;
+    }
 
-        String body = """
-                {
-                  "ok": false,
-                  "code": "%s",
-                  "message": "%s",
-                  "path": "%s"
-                }
-                """.formatted(code, message, req.getRequestURI());
-
-        res.getWriter().write(body);
-        res.getWriter().flush();
+    private static String firstNonBlank(String a, String b) {
+        if (StringUtils.hasText(a)) return a.trim();
+        if (StringUtils.hasText(b)) return b.trim();
+        return null;
     }
 }

@@ -26,6 +26,7 @@ public class PassportEvent {
     private ObjectId tenantId;
 
     private String system;
+    private String caseId;
     private String operationType;
     private String status;
     private Instant eventTime;

@@ -103,7 +103,9 @@ public class UserService {
 
     public Optional<User> findByEmail(ObjectId tenantId, String email) {
         if (tenantId == null) throw new ResponseStatusException(BAD_REQUEST, "missing_tenant");
-        return userRepository.findByTenantIdAndEmailIgnoreCase(tenantId, email);
+        if (email == null || email.isBlank()) return Optional.empty();
+
+        return userRepository.findByTenantIdAndEmailIgnoreCase(tenantId, email.trim());
     }
 
 

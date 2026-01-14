@@ -1,25 +1,21 @@
 package backlogs.dinamico.controller.dashboard;
 
 import backlogs.dinamico.api.ApiResponse;
-import backlogs.dinamico.api.dto.common.PageResult;
-import backlogs.dinamico.api.dto.passport.*;
-import backlogs.dinamico.infra.security.AuthUser;
-import backlogs.dinamico.model.passport.PassportEvent;
+import backlogs.dinamico.api.dto.logs.LogTimelineResponse;
+import backlogs.dinamico.api.dto.passport.PassportSummaryResponse;
+import backlogs.dinamico.api.dto.passport.PassportsByOfficeItem;
+import backlogs.dinamico.api.dto.passport.PassportsByTypeItem;
+import backlogs.dinamico.model.log.LogEvent;
 import backlogs.dinamico.service.dashboard.PassportEventService;
 import backlogs.dinamico.service.dashboard.PassportOverviewService;
 import backlogs.dinamico.service.dashboard.PassportTimelineService;
-import backlogs.dinamico.tenant.TenantContext;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
-import org.springframework.data.domain.Sort;
 import org.springframework.format.annotation.DateTimeFormat;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.server.ResponseStatusException;
-
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -32,37 +28,17 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class PassportDashboardController {
 
+    private static final String PASSPORT_SYSTEM = "PASSPORT_PA";
+
     private final PassportOverviewService passportOverviewService;
-    private final PassportEventService passportEventService;
-    private final PassportTimelineService timelineService;
-
-    @PostMapping("/events")
-    public ApiResponse<?> createEvent(@Valid @RequestBody PassportEventCreateReq req,
-                                      Authentication auth) {
-
-        ObjectId tenantId = resolveTenantId(auth);
-        PassportEvent saved = passportEventService.createEvent(tenantId, req);
-
-        return ApiResponse.ok(
-                "Evento de pasaporte registrado correctamente",
-                null,
-                Map.of(
-                        "id", saved.getId().toHexString(),
-                        "tenantId", saved.getTenantId().toHexString(),
-                        "status", saved.getStatus(),
-                        "operationType", saved.getOperationType(),
-                        "eventTime", saved.getEventTime()
-                )
-        );
-    }
+    private final PassportEventService passportEventService;     // ahora lee de log_events
+    private final PassportTimelineService timelineService;       // resuelve caseId y llama a timeline universal
 
     /*
-     * Resumen general de pasaportes (modulo vision General)
-     * si no se manda la fecha, se toman los ultimos 30 dias
+     * Resumen general (sigue siendo el mismo DTO, pero ahora se calcula desde log_events)
      */
     @GetMapping("/summary")
     public ApiResponse<PassportSummaryResponse> getSummary(
-
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate fromDate,
@@ -71,21 +47,14 @@ public class PassportDashboardController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate toDate,
 
-            @RequestParam(required = false)
-            String officeId,
-            @RequestParam(required = false)
-            String userId,
-            @RequestParam(required = false)
-            String channel,
-            @RequestParam(required = false)
-            String operationType,
+            @RequestParam(required = false) String officeId,
+            @RequestParam(required = false) String userId,
+            @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String operationType,
 
-            @RequestParam(name = "status", required = false)
-            String status,
-            @RequestParam(name = "dbStatus", required = false)
-            String dbStatus
+            @RequestParam(name = "status", required = false) String status,
+            @RequestParam(name = "dbStatus", required = false) String dbStatus
     ) {
-        // Normalizacion de los String
         officeId = normalize(officeId);
         userId = normalize(userId);
         channel = normalize(channel);
@@ -102,6 +71,7 @@ public class PassportDashboardController {
                 : null;
 
         PassportSummaryResponse data = passportOverviewService.getSummary(
+                PASSPORT_SYSTEM,
                 from,
                 to,
                 officeId,
@@ -111,27 +81,11 @@ public class PassportDashboardController {
                 finalStatus
         );
 
-        return ApiResponse.ok(
-                "Resumen general de pasaportes",
-                "passports_summary",
-                data
-        );
+        return ApiResponse.ok("Resumen general de pasaportes", "passports_summary", data);
     }
 
-    private String normalize(String v) {
-        if (v == null) return null;
-        v = v.trim();
-        if (v.isEmpty()) return null;
-        if ("null".equalsIgnoreCase(v)) return null;
-        return v;
-    }
-
-    /*
-     * Pasaportes por oficina en rango de fechas
-     */
     @GetMapping("/by-office")
     public ApiResponse<List<PassportsByOfficeItem>> getByOffice(
-
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate fromDate,
@@ -139,9 +93,7 @@ public class PassportDashboardController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
             LocalDate toDate
-
     ) {
-
         Instant from = (fromDate != null)
                 ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
                 : PassportOverviewService.defaultFrom();
@@ -150,79 +102,66 @@ public class PassportDashboardController {
                 ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
                 : PassportOverviewService.defaultTo();
 
-        List<PassportsByOfficeItem> data = passportOverviewService.getByOffice(from, to);
+        var data = passportOverviewService.getByOffice(PASSPORT_SYSTEM, from, to);
+        return ApiResponse.ok("Pasaportes agrupados por oficina", "passports_by_office", data);
+    }
 
-        return ApiResponse.ok(
-                "Pasaportes agrupados por oficina",
-                "passports_by_office",
-                data
-        );
+    @GetMapping("/by-type")
+    public ApiResponse<List<PassportsByTypeItem>> getByType(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate fromDate,
+
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            LocalDate toDate
+    ) {
+        Instant from = (fromDate != null)
+                ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
+                : PassportOverviewService.defaultFrom();
+
+        Instant to = (toDate != null)
+                ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
+                : PassportOverviewService.defaultTo();
+
+        var data = passportOverviewService.getByType(PASSPORT_SYSTEM, from, to);
+        return ApiResponse.ok("Pasaportes agrupados por tipo de trámite", "passports_by_type", data);
     }
 
     /*
-     * Pasaportes por tipo de tramite (NUEVO, RENOVACION, EMERGENCIA)
+     * GET ALL (ahora devuelve LogEvent desde log_events)
      */
-    @GetMapping("/by-type")
-    public ApiResponse<List<PassportsByTypeItem>> getByType(
-
-            @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            LocalDate fromDate,
-
-            @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            LocalDate toDate
-
-    ) {
-
-        Instant from = (fromDate != null)
-                ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
-                : PassportOverviewService.defaultFrom();
-
-        Instant to = (toDate != null)
-                ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
-                : PassportOverviewService.defaultTo();
-
-        List<PassportsByTypeItem> data = passportOverviewService.getByType(from, to);
-
-        return ApiResponse.ok(
-                "Pasaportes agrupados por tipo de trámite",
-                "passports_by_type",
-                data
-        );
-    }
-
-    // GET - ALL
     @GetMapping("/events")
-    public ApiResponse<Map<String, Object>> searchEvents(@RequestParam(defaultValue = "0") int page,
-                                                         @RequestParam(defaultValue = "10") int size,
-                                                         @RequestParam(defaultValue = "DESC") String sortDir,
-                                                         @RequestParam(required = false) String sortBy,
+    public ApiResponse<Map<String, Object>> searchEvents(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "DESC") String sortDir,
+            @RequestParam(required = false) String sortBy,
 
-                                                         @RequestParam(required = false) String status,
-                                                         @RequestParam(required = false) String operationType,
+            @RequestParam(required = false) String caseId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String operationType,
 
-                                                         @RequestParam(required = false) String officeId,
-                                                         @RequestParam(required = false) String userId,
-                                                         @RequestParam(required = false) String channel,
-                                                         @RequestParam(required = false) String message,
+            @RequestParam(required = false) String officeId,
+            @RequestParam(required = false) String userId,
+            @RequestParam(required = false) String channel,
+            @RequestParam(required = false) String message,
 
-                                                         @RequestParam(required = false) String reasonCode,
+            @RequestParam(required = false) String reasonCode,
 
-                                                         @RequestParam(required = false)
-                                                             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
+            // fallback para resolver caseId si te mandan estos:
+            @RequestParam(required = false) String passportNumber,
+            @RequestParam(required = false) String personId,
+            @RequestParam(required = false) String requestId,
 
-                                                         @RequestParam(required = false)
-                                                             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
 
-                                                         Authentication auth) {
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
 
-        ObjectId tenantId = resolveTenantId(auth);
-
-        Sort.Direction direction = "ASC".equalsIgnoreCase(sortDir)
-                ? Sort.Direction.ASC
-                : Sort.Direction.DESC;
-
+            Authentication auth
+    ) {
         Instant from = (fromDate != null)
                 ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
                 : PassportOverviewService.defaultFrom();
@@ -231,16 +170,21 @@ public class PassportDashboardController {
                 ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
                 : PassportOverviewService.defaultTo();
 
-        var pageResult = passportEventService.searchEvents(
+        var result = passportEventService.searchPassportEvents(
+                PASSPORT_SYSTEM,
                 from,
                 to,
-                status,
-                operationType,
-                officeId,
-                userId,
-                channel,
-                message,
-                reasonCode,
+                normalize(caseId),
+                normalize(passportNumber),
+                normalize(personId),
+                normalize(requestId),
+                normalize(status),
+                normalize(operationType),
+                normalize(officeId),
+                normalize(userId),
+                normalize(channel),
+                normalize(message),
+                normalize(reasonCode),
                 page,
                 size,
                 sortBy,
@@ -248,42 +192,31 @@ public class PassportDashboardController {
         );
 
         Map<String, Object> data = Map.of(
-                "items", pageResult.getContent(),
-                "page", pageResult.getNumber(),
-                "size", pageResult.getSize(),
-                "totalElements", pageResult.getTotalElements(),
-                "totalPages", pageResult.getTotalPages()
+                "items", result.getContent(),
+                "page", result.getNumber(),
+                "size", result.getSize(),
+                "totalElements", result.getTotalElements(),
+                "totalPages", result.getTotalPages()
         );
 
-        return ApiResponse.ok(
-                "Logs de pasaportes",
-                "passport_events_search",
-                data
-        );
+        return ApiResponse.ok("Logs de pasaportes (desde log_events)", "passport_events_search", data);
     }
 
-    // GET - ById
+    /*
+     * GET BY ID (ahora devuelve LogEvent)
+     */
     @GetMapping("/events/{id}")
-    public ApiResponse<PassportEvent> getEventById(@PathVariable String id,
-                                                   Authentication auth) {
-
-        ObjectId tenantId = resolveTenantId(auth);
-        ObjectId eventId = new ObjectId(id);
-
-        PassportEvent event = passportEventService
-                .findById(tenantId, eventId)
-                .orElseThrow(() -> new IllegalArgumentException("Log no encontrado"));
-
-        return ApiResponse.ok(
-                "Detalle del log de pasaporte",
-                "passport_log_detail",
-                event
-        );
-
+    public ApiResponse<LogEvent> getEventById(@PathVariable String id) {
+        LogEvent ev = passportEventService.getLogByIdForCurrentTenant(new ObjectId(id));
+        return ApiResponse.ok("Detalle del log", "passport_log_detail", ev);
     }
 
+    /*
+     * Timeline (devuelve el DTO universal LogTimelineResponse)
+     */
     @GetMapping("/timeline")
-    public ApiResponse<PassportTimelineResponse> getTimeline(
+    public ApiResponse<LogTimelineResponse> getTimeline(
+            @RequestParam(required = false) String caseId,
             @RequestParam(required = false) String passportNumber,
             @RequestParam(required = false) String personId,
             @RequestParam(required = false) String requestId,
@@ -294,55 +227,27 @@ public class PassportDashboardController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate
     ) {
+        Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+        Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
 
-        Instant from = null;
-        Instant to = null;
-
-        if (fromDate != null) {
-            from = fromDate.atStartOfDay().toInstant(ZoneOffset.UTC);
-        }
-        if (toDate != null) {
-            to = toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
-        }
-
-        PassportTimelineResponse data = timelineService.getTimeline(
-                passportNumber,
-                personId,
-                requestId,
+        var data = timelineService.timelinePassport(
+                PASSPORT_SYSTEM,
+                normalize(caseId),
+                normalize(passportNumber),
+                normalize(personId),
+                normalize(requestId),
                 from,
                 to
         );
 
-        return ApiResponse.ok(
-                "passports_timeline",
-                "Timeline de eventos de pasaporte",
-                data
-        );
-
+        return ApiResponse.ok("Timeline", "passports_timeline", data);
     }
 
-
-
-    private ObjectId resolveTenantId(Authentication auth) {
-
-        // 1) Intentar desde el principal (AuthUser)
-        if (auth != null && auth.getPrincipal() instanceof AuthUser au) {
-            ObjectId tenantId = au.tenantId();
-            if (tenantId != null) {
-                return tenantId;
-            }
-        }
-
-        // 2) Fallback: TenantContext
-        if (TenantContext.getTenantId() != null) {
-            return TenantContext.getTenantId();
-        }
-
-        // 3) Si no se pudo resolver, error 401
-        throw new ResponseStatusException(
-                HttpStatus.UNAUTHORIZED,
-                "tenant_not_resolved"
-        );
+    private String normalize(String v) {
+        if (v == null) return null;
+        v = v.trim();
+        if (v.isEmpty()) return null;
+        if ("null".equalsIgnoreCase(v)) return null;
+        return v;
     }
-
 }

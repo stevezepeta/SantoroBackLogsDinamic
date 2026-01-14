@@ -6,6 +6,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
+import backlogs.dinamico.api.dto.auth.QrLoginStatusMessage.Status;
 
 @Slf4j
 @Service
@@ -18,63 +20,65 @@ public class QrLoginNotifier {
         return "/topic/qr-login/" + qrToken;
     }
 
+    public void safeSend(String qrToken, QrLoginStatusMessage msg) {
+        if (!StringUtils.hasText(qrToken)) {
+            log.warn("[QR-LOGIN] No se envió WS porque qrToken es null/vacío. msg={}", msg);
+            return;
+        }
+
+        String destination = destinationOf(qrToken);
+        log.info("[QR-LOGIN] Notificando {} a {}", msg.status(), destination);
+        messagingTemplate.convertAndSend(destination, msg);
+    }
+
     // Se notifica al navegador que el QR fue utilizado
     public void notifySuccess(String qrToken, LoginResponse login) {
-
         QrLoginStatusMessage msg = new QrLoginStatusMessage(
-                "APROVED",
-                login.accessToken(),
-                login.refreshToken(),
-                login.tokenType(),
+                Status.APPROVED,
+                login != null ? login.accessToken() : null,
+                login != null ? login.refreshToken() : null,
+                login != null ? login.tokenType() : null,
                 "QR login aprobado"
         );
 
-        String destination = "/topic/qr-login/" + qrToken;
-        log.info("[QR-LOGIN] Notificando APPROVED a {}", destination);
-        messagingTemplate.convertAndSend(destination, msg);
+        safeSend(qrToken, msg);
     }
 
     // Notificar que el Qr expiro
     public void notifyExpired(String qrToken) {
         QrLoginStatusMessage msg = new QrLoginStatusMessage(
-                "EXPIRED",
+                Status.EXPIRED,
                 null,
                 null,
                 null,
                 "El codigo QR ha expirado. Genera uno nuevo."
         );
 
-        String destination = "/topic/qr-login/" + qrToken;
-        log.info("[QR-LOGIN] Notificando EXPIRED a {}", destination);
-        messagingTemplate.convertAndSend(destination, msg);
+        safeSend(qrToken, msg);
     }
 
     public void notifyAlreadyUsed(String qrToken) {
         QrLoginStatusMessage msg = new QrLoginStatusMessage(
-                "ALREADY_USED",
+                Status.ALREADY_USED,
                 null,
                 null,
                 null,
                 "Este codigo QR ya fue utilizado"
         );
 
-        String destination = destinationOf(qrToken);
-        log.info("[QR-LOGIN] Notificando ALREADY_USED a {}", destination);
-        messagingTemplate.convertAndSend(destination, msg);
+        safeSend(qrToken, msg);
     }
 
     public void notifyError(String qrToken) {
         QrLoginStatusMessage msg = new QrLoginStatusMessage(
-                "ERROR",
+                Status.ERROR,
                 null,
                 null,
                 null,
                 "Ocurrio un error al procesar QR."
         );
 
-        String destination = destinationOf(qrToken);
-        log.info("[QR-LOGIN] Notificando ERROR a {}", destination);
-        messagingTemplate.convertAndSend(destination, msg);
+        safeSend(qrToken, msg);
     }
 
 }

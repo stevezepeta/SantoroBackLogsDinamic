@@ -12,6 +12,9 @@ public record PassportEventCreateReq(
         String system,
 
         @NotBlank
+        String caseId,
+
+        @NotBlank
         String operationType,
 
         @NotBlank

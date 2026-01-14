@@ -1,14 +1,19 @@
 package backlogs.dinamico.controller.catalog;
 
 import backlogs.dinamico.api.ApiResponse;
-import backlogs.dinamico.model.ingest.ApiKey;              // <-- usa la entidad de ingest
-import backlogs.dinamico.repository.catalog.ApiKeyRep;     // tu repo (ver nota al final)
+import backlogs.dinamico.infra.security.AuthUser;
+import backlogs.dinamico.model.ingest.ApiKey;
+import backlogs.dinamico.repository.catalog.ApiKeyRep;
 import backlogs.dinamico.tenant.TenantContext;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.http.*;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -29,26 +34,28 @@ public class ApiKeyController {
 
   private final ApiKeyRep repo;
 
-  // --------- DTOs -------------
   @Data
   public static class CreateApiKeyReq {
+    @NotBlank private String name;
+    @NotBlank private String systemId;
+    @NotBlank private String environmentId;
+    @NotEmpty private List<String> scopes;
+    private Instant expiresAt;
 
-    private String name;
-    private String systemId;
-    private String environmentId;
-    private List<String> scopes;
-    private Instant expiresAt; //
-
+    // opcionales (los estabas mandando en Postman)
+    private String systemTag;
+    private String environmentTag;
   }
 
-  // --------- Helpers ----------
-  private static String newPlainKey(String systemTag, String environmentTag, String name) {
-    byte[] bytes = new byte[32];
+  private static final SecureRandom RNG = new SecureRandom();
 
-    new SecureRandom().nextBytes(bytes);
+  private static String newPlainKey(String systemTag, String environmentTag) {
+    byte[] bytes = new byte[32];
+    RNG.nextBytes(bytes);
+
     String suffix = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    String sys = (systemTag == null || systemTag.isBlank()) ? "svc" : systemTag;
-    String env = (environmentTag == null || environmentTag.isBlank()) ? "prod" : environmentTag;
+    String sys = (systemTag == null || systemTag.isBlank()) ? "svc" : systemTag.trim();
+    String env = (environmentTag == null || environmentTag.isBlank()) ? "prod" : environmentTag.trim();
 
     return sys + "_" + env + "_" + suffix;
   }
@@ -64,61 +71,74 @@ public class ApiKeyController {
 
   private static String fingerprint(String keyHash) {
     if (keyHash == null || keyHash.length() < 6) return "***";
-
-    return "..."+keyHash.substring(keyHash.length()-6);
+    return "..." + keyHash.substring(keyHash.length() - 6);
   }
 
-
-  // ---------- Endpoints ---------------
-  // Crea un API: guarda el HASH, devuelve el valor plano una sola vez
   @PreAuthorize("hasRole('ADMIN')")
   @PostMapping
-  public ResponseEntity<ApiResponse<Map<String, Object>>> create(@RequestBody CreateApiKeyReq body) {
+  public ResponseEntity<ApiResponse<Map<String, Object>>> create(
+          @AuthenticationPrincipal AuthUser me,
+          @Valid @RequestBody CreateApiKeyReq body
+  ) {
+    if (me == null || me.tenantId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
 
-    ObjectId tenantId = TenantContext.getTenantId();
-    if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
+    // IMPORTANTE: asegurar TenantContext para repos/tenant-mongoTemplate
+    ObjectId prev = TenantContext.getTenantId();
+    try {
+      TenantContext.setTenantId(me.tenantId());
 
-    // Generacion del plain
-    String plain = newPlainKey("elyctis", "prod", body.getName());
-    String hash = sha256b64(plain);
+      String plain = newPlainKey(body.getSystemTag(), body.getEnvironmentTag());
+      String hash = sha256b64(plain);
 
-    // Se construyen las entidades
-    ApiKey doc = new ApiKey();
-    doc.setId(null);
-    doc.setTenantId(tenantId);
-    doc.setName(body.getName());
-    doc.setSystemId(new ObjectId(body.getSystemId()));
-    doc.setEnvironmentId(new ObjectId(body.getEnvironmentId()));
-    doc.setScopes(body.getScopes());
-    doc.setKeyHash(hash);
-    doc. setStatus("active");
-    doc.setCreatedAt(Instant.now());
-    doc.setExpiresAt(body.getExpiresAt());
+      ApiKey doc = new ApiKey();
+      doc.setId(null);
+      doc.setTenantId(me.tenantId());
+      doc.setName(body.getName());
+      doc.setSystemId(new ObjectId(body.getSystemId()));
+      doc.setEnvironmentId(new ObjectId(body.getEnvironmentId()));
+      doc.setScopes(body.getScopes());
+      doc.setKeyHash(hash);
+      doc.setStatus("active");
+      doc.setCreatedAt(Instant.now());
+      doc.setExpiresAt(body.getExpiresAt());
 
-    doc = repo.save(doc);
+      doc = repo.save(doc);
 
-    return ResponseEntity.status(HttpStatus.CREATED)
-            .body(ApiResponse.created(
-                    "ApiKey creada",
-                    "/api/catalogs/api-key",
-                    Map.ofEntries(
-                            entry("id", doc.getId().toHexString()),
-                            entry("plain", plain),
-                            entry("name", doc.getName()),
-                            entry("systemId", doc.getSystemId()),
-                            entry("environmentId", doc.getEnvironmentId()),
-                            entry("scopes", doc.getScopes()),
-                            entry("fingerprint", fingerprint(doc.getKeyHash()))
-                    )
-            ));
-
+      return ResponseEntity.status(HttpStatus.CREATED).body(
+              ApiResponse.created(
+                      "ApiKey creada",
+                      "/api/catalogs/api-keys",
+                      Map.ofEntries(
+                              entry("id", doc.getId().toHexString()),
+                              entry("plain", plain), // devuélvelo solo aquí; guárdalo porque NO lo podrás recuperar
+                              entry("name", doc.getName()),
+                              entry("tenantId", doc.getTenantId().toHexString()),
+                              entry("systemId", doc.getSystemId().toHexString()),
+                              entry("environmentId", doc.getEnvironmentId().toHexString()),
+                              entry("scopes", doc.getScopes()),
+                              entry("status", doc.getStatus()),
+                              entry("expiresAt", doc.getExpiresAt()),
+                              entry("createdAt", doc.getCreatedAt()),
+                              entry("fingerprint", fingerprint(doc.getKeyHash()))
+                      )
+              )
+      );
+    } finally {
+      // restaurar contexto previo
+      if (prev == null) TenantContext.clear();
+      else TenantContext.setTenantId(prev);
+    }
   }
 
+  @PreAuthorize("hasRole('ADMIN')")
+  @GetMapping("/{id}")
+  public ResponseEntity<ApiResponse<Map<String, Object>>> get(@AuthenticationPrincipal AuthUser me, @PathVariable ObjectId id) {
+    if (me == null || me.tenantId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
 
-    // Detalle de ApiKey
-    @PreAuthorize("hasRole('ADMIN')")
-    @GetMapping("/{id}")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> get(@PathVariable ObjectId id) {
+    ObjectId prev = TenantContext.getTenantId();
+    try {
+      TenantContext.setTenantId(me.tenantId());
+
       ApiKey doc = repo.findById(id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
 
       return ResponseEntity.ok(ApiResponse.ok(
@@ -126,10 +146,10 @@ public class ApiKeyController {
               "/api/catalogs/api-keys/" + id,
               Map.ofEntries(
                       entry("id", doc.getId().toHexString()),
-                      entry("tenantId", doc.getTenantId()),
+                      entry("tenantId", doc.getTenantId().toHexString()),
                       entry("name", doc.getName()),
-                      entry("systemId", doc.getSystemId()),
-                      entry("environmentId", doc.getEnvironmentId()),
+                      entry("systemId", doc.getSystemId().toHexString()),
+                      entry("environmentId", doc.getEnvironmentId().toHexString()),
                       entry("scopes", doc.getScopes()),
                       entry("status", doc.getStatus()),
                       entry("expiresAt", doc.getExpiresAt()),
@@ -138,15 +158,27 @@ public class ApiKeyController {
                       entry("fingerprint", fingerprint(doc.getKeyHash()))
               )
       ));
+    } finally {
+      if (prev == null) TenantContext.clear();
+      else TenantContext.setTenantId(prev);
     }
+  }
 
-    /** Revocar/Eliminar */
-    @PreAuthorize("hasTenantPermission('apikeys:manage')")
-    @DeleteMapping("/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable ObjectId id) {
+  @PreAuthorize("hasTenantPermission('apikeys:manage')")
+  @DeleteMapping("/{id}")
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  public void delete(@AuthenticationPrincipal AuthUser me, @PathVariable ObjectId id) {
+    if (me == null || me.tenantId() == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
+
+    ObjectId prev = TenantContext.getTenantId();
+    try {
+      TenantContext.setTenantId(me.tenantId());
+
       if (!repo.existsById(id)) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
       repo.deleteById(id);
+    } finally {
+      if (prev == null) TenantContext.clear();
+      else TenantContext.setTenantId(prev);
     }
-
+  }
 }

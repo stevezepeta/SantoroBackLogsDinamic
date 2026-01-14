@@ -2,20 +2,19 @@ package backlogs.dinamico.controller.core;
 
 import backlogs.dinamico.service.core.InviteServices;
 import backlogs.dinamico.tenant.TenantContext;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
-@RestController
 @RequestMapping("")
 @RequiredArgsConstructor
 public class InviteAdminController {
@@ -23,19 +22,28 @@ public class InviteAdminController {
     private final InviteServices invites;
 
     @PostMapping
-    @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<?> create(@RequestBody CreateInviteReq req) {
+    @PreAuthorize("hasAnyRole('ADMIN','TENANT_OWNER')")
+    public ResponseEntity<?> create(@Valid @RequestBody CreateInviteReq req) {
 
         ObjectId tenantId = TenantContext.getTenantId();
-        var inv = invites.create(tenantId, req.email(), req.roles(), Duration.ofHours(req.ttlHours() == null ? 24 : req.ttlHours()));
+
+        var inv = invites.create(
+                tenantId,
+                req.email().trim().toLowerCase(),
+                req.roles(),
+                Duration.ofHours(req.ttlHours() == null ? 24 : req.ttlHours())
+        );
 
         return ResponseEntity.ok(Map.of(
                 "ok", true,
-                "token", inv.getToken(),     // devuélvelo sólo en pruebas; en prod se manda por correo
+                "token", inv.getToken(),     // SOLO dev
                 "expiresAt", inv.getExpiresAt()
         ));
     }
 
-    public record CreateInviteReq(String email, List<String> roles, Long ttlHours) {}
-
+    public record CreateInviteReq(
+            @NotBlank @Email String email,
+            List<String> roles,
+            Long ttlHours
+    ) {}
 }

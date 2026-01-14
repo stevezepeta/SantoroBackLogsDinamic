@@ -19,7 +19,6 @@ import io.jsonwebtoken.JwtException;
 import jakarta.validation.Valid;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.Authentication;
 import org.bson.types.ObjectId;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -28,7 +27,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.util.List;
 import java.util.Map;
@@ -51,8 +49,6 @@ public class WebAuthController {
 
     private final QrLoginService qrLoginService;
 
-    private final SimpMessagingTemplate messagingTemplate;
-
     // -------------------- Login --------------------
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<Map<String, Object>> login(@RequestBody LoginReq req) {
@@ -60,7 +56,6 @@ public class WebAuthController {
         if (req == null ||
                 !StringUtils.hasText(req.getEmail()) ||
                 !StringUtils.hasText(req.getPassword())) {
-
             throw new ResponseStatusException(BAD_REQUEST, "El email y password es requerido");
         }
 
@@ -69,9 +64,8 @@ public class WebAuthController {
         User u = userRepo.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new BadCredentialsException("bad"));
 
-        if (!"active".equalsIgnoreCase(u.getStatus())) {
-            throw new ResponseStatusException(FORBIDDEN, "inactive_user");
-        }
+        assertActive(u);
+
         if (!passwordEncoder.matches(req.getPassword(), u.getPasswordHash())) {
             throw new BadCredentialsException("bad");
         }
@@ -81,16 +75,9 @@ public class WebAuthController {
             throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "user_without_tenant");
         }
 
-        List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, u.getId())
-                .stream()
-                .map(link -> roleRepo.findById(link.getRoleId()).orElse(null))
-                .filter(Objects::nonNull)
-                .toList();
+        List<Role> roles = loadRoles(tenantId, u.getId());
 
-        // Access Token
         String accessToken = tokens.generate(u, roles, tenantId);
-
-        // Refresh Token
         String refreshToken = tokens.generateRefresh(u, roles, tenantId);
 
         Map<String, Object> data = Map.of(
@@ -108,25 +95,39 @@ public class WebAuthController {
         return ApiResponse.ok("Login exitoso", null, data);
     }
 
+    // -------------------- Refresh --------------------
     @PostMapping("/refresh")
     public ResponseEntity<ApiResponse> refresh(@Valid @RequestBody RefreshTokenRequest req) {
 
         try {
             Claims claims = tokens.verifyRefresh(req.refreshToken());
 
-            String email = claims.get("email", String.class);
+            // preferimos subject como fuente principal
+            String email = claims.getSubject();
+            if (!StringUtils.hasText(email)) {
+                email = claims.get("email", String.class);
+            }
+
             String tenantIdHex = claims.get("tenantId", String.class);
 
-            if (email == null || tenantIdHex == null) {
+            if (!StringUtils.hasText(email) || !StringUtils.hasText(tenantIdHex) || !ObjectId.isValid(tenantIdHex)) {
                 throw new IllegalArgumentException("Invalid refresh token claims");
             }
 
             ObjectId tenantId = new ObjectId(tenantIdHex);
 
+            // cargar usuario desde tenant
             User user = userService.findByEmail(tenantId, email)
                     .orElseThrow(() -> new IllegalStateException("User not found for refresh token"));
 
-            String newAccessToken = tokens.generate(user, null, tenantId);
+            assertActive(user);
+
+            // IMPORTANTE: recargar roles para que el nuevo access token traiga permisos
+            List<Role> roles = loadRoles(tenantId, user.getId());
+
+            String newAccessToken = tokens.generate(user, roles, tenantId);
+
+            // si NO quieres rotación de refresh, regresamos el mismo
             String refreshToken = req.refreshToken();
 
             LoginResponse resp = new LoginResponse(newAccessToken, refreshToken, "Bearer");
@@ -143,62 +144,53 @@ public class WebAuthController {
                             null
                     ));
         }
+    }
 
+    // -------------------- QR token (PC) --------------------
+    @GetMapping("/qr-token")
+    public ResponseEntity<ApiResponse> createQrToken() {
+        QrTokenResponse qrToken = qrLoginService.createQrToken();
+        return ResponseEntity.ok(ApiResponse.success("Qr Token generado", qrToken));
+    }
+
+    // -------------------- QR login (móvil) --------------------
+    @PostMapping("/qr-login")
+    public ResponseEntity<ApiResponse> qrLogin(@Valid @RequestBody QrLoginRequest request,
+                                               org.springframework.security.core.Authentication auth) {
+
+        LoginResponse login = qrLoginService.loginWithQrToken(request.qrToken(), auth);
+
+        return ResponseEntity.ok(
+                ApiResponse.success("Qr Login successful", login)
+        );
+    }
+
+    // -------------------- Helpers --------------------
+    private void assertActive(User u) {
+        if (u == null) throw new BadCredentialsException("bad");
+        if (!"active".equalsIgnoreCase(u.getStatus())) {
+            throw new ResponseStatusException(FORBIDDEN, "inactive_user");
+        }
+    }
+
+    private List<Role> loadRoles(ObjectId tenantId, ObjectId userId) {
+        return userRoleRepo.findByTenantIdAndUserId(tenantId, userId)
+                .stream()
+                .map(link -> roleRepo.findById(link.getRoleId()).orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     private Map<String, Object> orgBlock(ObjectId tenantId) {
         return orgRepo.findById(tenantId)
                 .<Map<String, Object>>map(o -> Map.of(
-                        "id",   o.getId().toHexString(),
+                        "id", o.getId().toHexString(),
                         "name", o.getName()
                 ))
                 .orElseGet(() -> Map.of(
-                        "id",   tenantId.toHexString(),
+                        "id", tenantId.toHexString(),
                         "name", "(unknown)"
                 ));
-    }
-
-    // Login desde la PC el usuario ya autenticado pide el QR
-    @GetMapping("/qr-token")
-    public ResponseEntity<ApiResponse> createQrToken() {
-
-        QrTokenResponse qrToken = qrLoginService.createQrToken();
-        return ResponseEntity.ok(
-                ApiResponse.success("Qr Token generado", qrToken)
-        );
-
-    }
-
-    // Desde el celular escanear el QR
-    @PostMapping("/qr-login")
-    public ResponseEntity<ApiResponse> qrLogin(@Valid
-                                               @RequestBody QrLoginRequest request,
-                                               Authentication auth) {
-
-        // Marca la sesion como usada
-        LoginResponse login = qrLoginService.loginWithQrToken(request.qrToken(), auth);
-
-        // Se construye el payload que se recibira en el navegador
-        Map<String, Object> wsPayload = Map.of(
-                "status", "APPROVED",
-                "accesToken", login.accessToken(),
-                "refreshToken", login.refreshToken(),
-                "tokeType", login.tokenType()
-        );
-
-        // Se envia el mensaje al topic
-        String dest = "/topic/qr-login/" + request.qrToken();
-
-        // Respuesta simpel al movil
-        Map<String, Object> httpData = Map.of(
-                "qrToke", request.qrToken(),
-                "status", "linked"
-        );
-
-        return ResponseEntity.ok(
-                ApiResponse.success("Qr Login successful", login)
-        );
-
     }
 
     // -------------------- DTOs --------------------

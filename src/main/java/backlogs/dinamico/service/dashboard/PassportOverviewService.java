@@ -16,7 +16,6 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -32,10 +31,11 @@ public class PassportOverviewService {
 
     private final MongoTemplate mongoTemplate;
 
-    private static final String COLLECTION = "passport_events";
-
-    // Sistema específico de Panamá
-    private static final String PASSPORT_SYSTEM = "PASSPORT_PA";
+    /**
+     * SWITCH INMEDIATO:
+     * ahora todo el dashboard de pasaportes se calcula desde log_events (esquema universal).
+     */
+    private static final String COLLECTION = "log_events";
 
     // Helpers para fechas por defecto
     public static Instant defaultFrom() {
@@ -53,9 +53,19 @@ public class PassportOverviewService {
     }
 
     /*
-     * Resumen general de pasaportes en un rango de fechas
+     * Resumen general en un rango de fechas.
+     *
+     * Mapeo universal:
+     * - system -> system
+     * - eventTime -> eventTime
+     * - status -> status
+     * - operationType -> eventType
+     * - officeId -> location.locationId
+     * - userId -> actor.actorId
+     * - channel -> payload.channel  (recomendado)
      */
     public PassportSummaryResponse getSummary(
+            String passportSystem,
             Instant from,
             Instant to,
             String officeId,
@@ -64,39 +74,39 @@ public class PassportOverviewService {
             String operationType,
             String status
     ) {
-
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
-        // Criteria dinamico
         List<Criteria> criteriaList = new ArrayList<>();
         criteriaList.add(Criteria.where("tenantId").is(tenantId));
-        criteriaList.add(Criteria.where("system").is(PASSPORT_SYSTEM));
+        criteriaList.add(Criteria.where("system").is(passportSystem));
 
         // Fechas solo si vienen
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to);
+            if (to != null) time = time.lt(to); // exclusivo para que cuente bien por día
             criteriaList.add(time);
         }
 
         if (StringUtils.hasText(officeId)) {
-            criteriaList.add(Criteria.where("office.officeId").is(officeId));
+            criteriaList.add(Criteria.where("location.locationId").is(officeId));
         }
 
         if (StringUtils.hasText(userId)) {
-            criteriaList.add(Criteria.where("user.userId").is(userId));
+            criteriaList.add(Criteria.where("actor.actorId").is(userId));
         }
 
         if (StringUtils.hasText(channel)) {
-            criteriaList.add(Criteria.where("channel").is(channel));
+            // canal viene dentro del payload en esquema universal
+            criteriaList.add(Criteria.where("payload.channel").is(channel));
         }
 
         if (StringUtils.hasText(operationType)) {
-            criteriaList.add(Criteria.where("operationType").is(operationType));
+            // operationType del dashboard pasaportes -> eventType universal
+            criteriaList.add(Criteria.where("eventType").is(operationType));
         }
 
         if (StringUtils.hasText(status)) {
@@ -116,7 +126,7 @@ public class PassportOverviewService {
         AggregationResults<Document> totalsResults =
                 mongoTemplate.aggregate(totalsAgg, COLLECTION, Document.class);
 
-        long emitidos = 0L, enTramite = 0L,  rechazados = 0L, cancelados = 0L;
+        long emitidos = 0L, enTramite = 0L, rechazados = 0L, cancelados = 0L;
 
         for (Document d : totalsResults.getMappedResults()) {
             String dbStatus = d.getString("_id");
@@ -133,7 +143,7 @@ public class PassportOverviewService {
             }
         }
 
-        // Por dia
+        // Por día
         Aggregation perDayAgg = newAggregation(
                 match(baseCriteria),
                 project("status")
@@ -146,7 +156,6 @@ public class PassportOverviewService {
         AggregationResults<Document> perDayResults =
                 mongoTemplate.aggregate(perDayAgg, COLLECTION, Document.class);
 
-        // Mapear DTO
         List<PassportSummaryResponse.PorDia> perDayDtos =
                 perDayResults.getMappedResults().stream()
                         .collect(java.util.stream.Collectors.groupingBy(
@@ -186,39 +195,49 @@ public class PassportOverviewService {
                         .toList();
 
         return new PassportSummaryResponse(
-           from,
-           to,
-           new PassportSummaryResponse.Totales(
-                   emitidos,
-                   enTramite,
-                   rechazados,
-                   cancelados
-           ),
-           perDayDtos
+                from,
+                to,
+                new PassportSummaryResponse.Totales(
+                        emitidos,
+                        enTramite,
+                        rechazados,
+                        cancelados
+                ),
+                perDayDtos
         );
     }
 
     /*
-     * Pasaportes por oficina en un rango de fechas
+     * Por oficina
+     * Mapeo:
+     * - officeId/officeName => location.locationId / location.locationName
      */
-    public List<PassportsByOfficeItem> getByOffice(Instant from, Instant to) {
+    public List<PassportsByOfficeItem> getByOffice(String passportSystem, Instant from, Instant to) {
 
         ObjectId tenantId = TenantContext.getTenantId();
-        if(tenantId == null) {
+        if (tenantId == null) {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
-        Criteria baseCriteria = Criteria.where("tenantId").is(tenantId)
-                .and("system").is(PASSPORT_SYSTEM)
-                .and("eventTime").gte(from).lte(to);
+        List<Criteria> criteria = new ArrayList<>();
+        criteria.add(Criteria.where("tenantId").is(tenantId));
+        criteria.add(Criteria.where("system").is(passportSystem));
+
+        // Fechas opcionales
+        if (from != null || to != null) {
+            Criteria time = Criteria.where("eventTime");
+            if (from != null) time = time.gte(from);
+            if (to != null) time = time.lt(to);
+            criteria.add(time);
+        }
+
+        Criteria baseCriteria = new Criteria().andOperator(criteria.toArray(new Criteria[0]));
 
         Aggregation agg = newAggregation(
                 match(baseCriteria),
-                // Proyectamos status + datos de oficina
                 project("status")
-                        .and("office.officeId").as("officeId")
-                        .and("office.officeName").as("officeName"),
-                // Agrupamos por oficina + status
+                        .and("location.locationId").as("officeId")
+                        .and("location.locationName").as("officeName"),
                 group("officeId", "officeName", "status").count().as("count"),
                 sort(Sort.Direction.ASC, "_id.officeName")
         );
@@ -226,7 +245,6 @@ public class PassportOverviewService {
         AggregationResults<Document> results =
                 mongoTemplate.aggregate(agg, COLLECTION, Document.class);
 
-        // Agrupamos en memoria por officeId
         return results.getMappedResults().stream()
                 .collect(java.util.stream.Collectors.groupingBy(
                         d -> d.get("_id", Document.class).getString("officeId"),
@@ -237,7 +255,6 @@ public class PassportOverviewService {
                     String officeId = e.getKey();
                     List<Document> docs = e.getValue();
 
-                    // Tomamos officeName del primer documento
                     Document firstId = docs.get(0).get("_id", Document.class);
                     String officeName = firstId.getString("officeName");
 
@@ -268,42 +285,46 @@ public class PassportOverviewService {
                             cancelados
                     );
                 })
-                // Ordenamos de mayor a menor por emitidos
                 .sorted((a, b) -> Long.compare(b.emitidos(), a.emitidos()))
                 .toList();
     }
 
     /*
-     * Reportes por tipo de tramite
+     * Por tipo (operationType del dashboard -> eventType universal)
      */
-    public List<PassportsByTypeItem> getByType(Instant from, Instant to) {
+    public List<PassportsByTypeItem> getByType(String passportSystem, Instant from, Instant to) {
 
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
-        Criteria baseCriteria = Criteria.where("tenantId").is(tenantId)
-                .and("system").is(PASSPORT_SYSTEM)
-                .and("eventTime").gte(from).lte(to);
+        List<Criteria> criteria = new ArrayList<>();
+        criteria.add(Criteria.where("tenantId").is(tenantId));
+        criteria.add(Criteria.where("system").is(passportSystem));
+
+        if (from != null || to != null) {
+            Criteria time = Criteria.where("eventTime");
+            if (from != null) time = time.gte(from);
+            if (to != null) time = time.lt(to);
+            criteria.add(time);
+        }
+
+        Criteria baseCriteria = new Criteria().andOperator(criteria.toArray(new Criteria[0]));
 
         Aggregation agg = newAggregation(
                 match(baseCriteria),
-                // Proyectamos operationType (tipo) + status
-                project("operationType", "status"),
-                // Agrupamos por tipo + status
-                group("operationType", "status").count().as("count"),
-                sort(Sort.Direction.ASC, "_id.operationType")
+                project("eventType", "status"),
+                group("eventType", "status").count().as("count"),
+                sort(Sort.Direction.ASC, "_id.eventType")
         );
 
         AggregationResults<Document> results =
                 mongoTemplate.aggregate(agg, COLLECTION, Document.class);
 
-
-        // Agrupamos en memoria por tipo de trámite
         return results.getMappedResults().stream()
                 .collect(java.util.stream.Collectors.groupingBy(
-                        d -> d.get("_id", Document.class).getString("operationType"),
+                        d -> d.get("_id", Document.class).getString("eventType"),
                         java.util.stream.Collectors.toList()
                 ))
                 .entrySet().stream()
@@ -337,41 +358,28 @@ public class PassportOverviewService {
                             cancelados
                     );
                 })
-                // Ordenamos de mayor a menor por emitidos
                 .sorted((a, b) -> Long.compare(b.emitidos(), a.emitidos()))
                 .toList();
     }
 
     // Normalizar status ENTRAMITE
     private boolean isEnTramite(String status) {
-
         if (status == null) return false;
-        String norm = status
-                .replace("_", "")
-                .replace(" ", "")
-                .toUpperCase();
-        return "ENTRAMITE".equals(norm);
+        String norm = status.replace("_", "").replace(" ", "").toUpperCase();
+        return "ENTRAMITE".equals(norm) || "EN_TRAMITE".equals(norm);
     }
 
-
-    // Devuelve ClassCastException
     private long getCountAsLong(Document d) {
         Number n = d.get("count", Number.class);
-
         return n != null ? n.longValue() : 0L;
     }
 
-    // Helper para normalizar el status
     private String normalizeStatusFilter(String raw) {
-
         if (raw == null) return null;
         String s = raw.trim().toUpperCase();
-
         if ("ENTRAMITE".equals(s) || "EN_TRAMITE".equals(s)) {
             return "EN_TRAMITE";
         }
-
         return s;
     }
-
 }

@@ -8,7 +8,7 @@ spring:
       allow-comments: true
 
 multitenant:
-  strategy: collection-per-tenant
+  strategy: single
   base-database: logs_system
   log-collection: log_events
   ensure-indexes: true

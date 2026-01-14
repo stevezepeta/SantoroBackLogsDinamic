@@ -8,17 +8,18 @@ import backlogs.dinamico.model.auth.QrLoginSession;
 import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
 import backlogs.dinamico.repository.auth.QrLoginSessionRepository;
+import backlogs.dinamico.repository.core.RoleRepository;
+import backlogs.dinamico.repository.core.UserRoleRepository;
 import backlogs.dinamico.service.core.UserService;
-import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -29,12 +30,13 @@ public class QrLoginService {
     private final UserService userService;
     private final JwtTokenService jwtTokenService;
     private final QrLoginNotifier qrLoginNotifier;
+    private final UserRoleRepository userRoleRepo;
+    private final RoleRepository roleRepo;
 
     // Duracion del token 2 min
     private static final Duration QR_TOKEN_TTL = Duration.ofMinutes(2);
 
     public QrTokenResponse createQrToken() {
-
         String qrToken = UUID.randomUUID().toString();
         Instant now = Instant.now();
 
@@ -49,14 +51,15 @@ public class QrLoginService {
         qrRepo.save(session);
 
         return new QrTokenResponse(qrToken, QR_TOKEN_TTL.toSeconds());
-
     }
-
 
     public LoginResponse loginWithQrToken(String qrToken, Authentication auth) {
 
-        if (auth == null || auth.getPrincipal() == null) {
+        if (qrToken == null || qrToken.isBlank()) {
+            throw new IllegalArgumentException("qrToken is required");
+        }
 
+        if (auth == null || auth.getPrincipal() == null) {
             qrLoginNotifier.notifyError(qrToken);
             throw new IllegalArgumentException("No autenticado");
         }
@@ -72,7 +75,12 @@ public class QrLoginService {
         ObjectId tenantId = authUser.tenantId();
         String email = authUser.email();
 
-        // 2) Cargar la sesión de QR
+        if (tenantId == null || email == null || email.isBlank()) {
+            qrLoginNotifier.notifyError(qrToken);
+            throw new IllegalArgumentException("Token sin tenantId/email");
+        }
+
+        // 1) Cargar la sesión de QR
         QrLoginSession session = qrRepo.findByQrToken(qrToken)
                 .orElseThrow(() -> {
                     // QR inexistente o inválido
@@ -97,12 +105,6 @@ public class QrLoginService {
             throw new IllegalArgumentException("QR token expired");
         }
 
-        // marcamos como usado para que sea one-time
-        session.setUsed(true);
-        session.setTenantId(tenantId.toHexString());
-        session.setEmail(email);
-        qrRepo.save(session);
-
         // Se recupera el User
         User user = userService.findByEmail(tenantId, email)
                 .orElseThrow(() -> {
@@ -110,16 +112,34 @@ public class QrLoginService {
                     return new IllegalStateException("User not found");
                 });
 
-        String accessToken = jwtTokenService.generate(user, null, tenantId);
-        String refreshToken = jwtTokenService.generateRefresh(user, null, tenantId);
+        if (!"active".equalsIgnoreCase(user.getStatus())) {
+            qrLoginNotifier.notifyError(qrToken);
+            throw new IllegalStateException("inactive_user");
+        }
+
+        // Cargar roles
+        List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, user.getId())
+                .stream()
+                .map(link -> roleRepo.findById(link.getRoleId()).orElse(null))
+                .filter(Objects::nonNull)
+                .toList();
+
+        // Generar tokens con roles
+        String accessToken = jwtTokenService.generate(user, roles, tenantId);
+        String refreshToken = jwtTokenService.generateRefresh(user, roles, tenantId);
 
         LoginResponse resp = new LoginResponse(accessToken, refreshToken, "Bearer");
+
+        // Marcar sesion como usada (one-time)
+        session.setUsed(true);
+        session.setTenantId(tenantId.toHexString());
+        session.setEmail(email);
+        qrRepo.save(session);
 
         // Notificacion a la PC
         qrLoginNotifier.notifySuccess(qrToken, resp);
 
         return resp;
-
     }
 
 }
