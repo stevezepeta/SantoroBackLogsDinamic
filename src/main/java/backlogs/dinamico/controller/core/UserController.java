@@ -1,6 +1,7 @@
 package backlogs.dinamico.controller.core;
 
 import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.model.core.RoleCode;
 import backlogs.dinamico.model.core.User;
 import backlogs.dinamico.service.core.UserRoleService;
 import backlogs.dinamico.service.core.UserService;
@@ -61,7 +62,7 @@ public class UserController {
                         u.getStatus(),
                         u.getCreatedAt(),
                         u.getUpdatedAt(),
-                        roleService.getRoleCode(tenantId, u.getId())
+                        roleService.getRoleCodes(tenantId, u.getId())
                 ))
                 .toList();
 
@@ -77,7 +78,7 @@ public class UserController {
         ObjectId tenantId = requireTenant();
 
         User u = service.get(tenantId, id);
-        List<String> roles = roleService.getRoleCode(tenantId, u.getId());
+        List<String> roles = roleService.getRoleCodes(tenantId, u.getId());
 
         UserDetail dto = new UserDetail(
                 u.getId().toHexString(),
@@ -97,7 +98,7 @@ public class UserController {
         ObjectId tenantId = requireTenant();
 
         User saved = service.create(tenantId, body);
-        List<String> roles = roleService.getRoleCode(tenantId, saved.getId());
+        List<String> roles = roleService.getRoleCodes(tenantId, saved.getId());
 
         UserDetail dto = new UserDetail(
                 saved.getId().toHexString(),
@@ -117,7 +118,7 @@ public class UserController {
         ObjectId tenantId = requireTenant();
 
         User updated = service.update(tenantId, id, body);
-        List<String> roles = roleService.getRoleCode(tenantId, updated.getId());
+        List<String> roles = roleService.getRoleCodes(tenantId, updated.getId());
 
         UserDetail dto = new UserDetail(
                 updated.getId().toHexString(),

@@ -108,7 +108,7 @@ public class LogEvent {
   @Field("tags")
   private List<String> tags = new ArrayList<>();
 
-  @Field("payloads")
+  @Field("payload")
   private Map<String, Object> payload;
   @Field("meta")
   private Map<String, Object> meta;

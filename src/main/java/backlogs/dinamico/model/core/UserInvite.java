@@ -37,6 +37,9 @@ public class UserInvite {
 
     private List<String> roles;
 
+    @Field("systems")          // NUEVO
+    private List<String> systems;
+
     private String token;
     private Instant expiresAt;
 
@@ -48,5 +51,4 @@ public class UserInvite {
 
     private Instant createdAt;
     private Instant updateAt;
-
 }

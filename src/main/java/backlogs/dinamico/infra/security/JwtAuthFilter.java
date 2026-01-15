@@ -11,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -18,12 +19,22 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.stream.Stream;
 
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
+
+    // Aceptamos cualquiera de estos nombres de claim para permisos
+    private static final String CLAIM_PERMS_PRIMARY = "perms";
+    private static final String CLAIM_PERMS_ALT     = "permissions";
+
+    private static final String CLAIM_ORG_WIDE = "orgWide";
+    private static final String CLAIM_SYSTEMS  = "systems";
 
     private final JwtTokenService tokens;
 
@@ -35,7 +46,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         String header = request.getHeader("Authorization");
         boolean hasBearer = header != null && header.startsWith("Bearer ");
 
-        // Si no hay token o ya hay auth, seguimos normal
         if (!hasBearer || SecurityContextHolder.getContext().getAuthentication() != null) {
             chain.doFilter(request, response);
             return;
@@ -44,15 +54,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         try {
             String token = header.substring(7);
 
-            // ✅ recomendado: si quieres, puedes usar verifyAccess(token) aquí
-            Claims c = tokens.verify(token);
+            // SOLO ACCESS
+            Claims c = tokens.verifyAccess(token);
 
             String email  = c.getSubject();
             String name   = c.get("name", String.class);
-
             String uidHex = c.get("uid", String.class);
 
-            // tenantId puede venir con nombres distintos
+            // tenant / org (varios aliases por compatibilidad)
             String tenantHex = firstNonBlank(
                     c.get("tenantId", String.class),
                     c.get("orgId", String.class),
@@ -61,7 +70,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     c.get("org", String.class)
             );
 
-            // orgId explícito (si lo manejas separado)
             String orgHex = firstNonBlank(
                     c.get("organizationId", String.class),
                     c.get("orgId", String.class),
@@ -69,76 +77,93 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     c.get("org", String.class)
             );
 
-            @SuppressWarnings("unchecked")
-            List<Object> rolesRaw = c.get("roles", List.class);
-
-            // NORMALIZACIÓN DE ROLES:
-            // - acepta "ADMIN" o "ROLE_ADMIN"
-            // - quita espacios
-            // - uppercase
-            // - distinct
-            List<String> roleCodes = (rolesRaw == null)
-                    ? List.of()
-                    : rolesRaw.stream()
-                    .map(String::valueOf)
-                    .map(String::trim)
-                    .filter(s -> !s.isBlank())
-                    .map(s -> s.startsWith("ROLE_") ? s.substring("ROLE_".length()) : s)
-                    .map(String::toUpperCase)
-                    .distinct()
-                    .toList();
-
-            var authorities = roleCodes.stream()
-                    .map(r -> new SimpleGrantedAuthority("ROLE_" + r))
-                    .toList();
-
             ObjectId tenantId = toObjectId(tenantHex);
             ObjectId orgId    = toObjectId(orgHex);
             ObjectId userId   = toObjectId(uidHex);
 
-            // Si tenant no vino en el token, pero ya estaba en contexto (por header)
+            // Merge con TenantContext previo
             var prev = TenantContext.get();
             if (tenantId == null) tenantId = prev.getTenantId();
             if (orgId == null) orgId = prev.getOrganizationId();
 
-            // Regla: no autenticamos sin tenant
-            if (tenantId == null) {
-                throw new JwtException("tenant_not_resolved_in_jwt");
-            }
+            if (tenantId == null) throw new JwtException("tenant_not_resolved_in_jwt");
+            if (orgId == null) orgId = tenantId;
 
-            if (orgId == null) orgId = tenantId; // compat
+            // ---------------- Roles ----------------
+            @SuppressWarnings("unchecked")
+            List<Object> rolesRaw = c.get("roles", List.class);
 
-            // Set TenantContext (merge + preserve)
+            List<String> roleCodes = normalizeList(rolesRaw)
+                    .map(s -> s.startsWith("ROLE_") ? s.substring("ROLE_".length()) : s)
+                    .map(s -> s.toUpperCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
+
+            // ---------------- Permisos ----------------
+            // soporta claim "perms" o "permissions"
+            @SuppressWarnings("unchecked")
+            List<Object> permsRaw = firstNonNullList(
+                    c.get(CLAIM_PERMS_PRIMARY, List.class),
+                    c.get(CLAIM_PERMS_ALT, List.class)
+            );
+
+            List<String> permCodes = normalizeList(permsRaw)
+                    // si ya viniera con PERM_ lo normalizamos a puro código
+                    .map(s -> s.startsWith("PERM_") ? s.substring("PERM_".length()) : s)
+                    .map(s -> s.toUpperCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
+
+            // ---------------- Scope (orgWide / systems) ----------------
+            Boolean orgWide = c.get(CLAIM_ORG_WIDE, Boolean.class);
+            boolean isOrgWide = orgWide != null && orgWide;
+
+            @SuppressWarnings("unchecked")
+            List<Object> systemsRaw = c.get(CLAIM_SYSTEMS, List.class);
+
+            List<String> allowedSystems = normalizeList(systemsRaw)
+                    .map(s -> s.toUpperCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
+
+            if (isOrgWide) allowedSystems = List.of(); // orgWide => no aplica systems
+
+            // ---------------- TenantContext ----------------
             TenantContext.set(TenantContext.Ctx.builder()
                     .tenantId(tenantId)
                     .organizationId(orgId)
                     .userId(userId)
                     .email(email)
                     .name(name)
-
-                    // preservar lo que pudo venir antes (API key, etc.)
                     .systemId(prev.getSystemId())
                     .environmentId(prev.getEnvironmentId())
                     .dbName(prev.getDbName())
                     .collectionSuffix(prev.getCollectionSuffix())
                     .build());
 
+            // ---------------- Principal ----------------
             AuthUser principal = new AuthUser(
                     userId,
                     email,
                     name,
                     tenantId,
-                    roleCodes
+                    roleCodes,
+                    permCodes,
+                    isOrgWide,
+                    allowedSystems
             );
 
-            var authentication =
-                    new UsernamePasswordAuthenticationToken(principal, null, authorities);
+            // ---------------- Authorities (SecurityConfig usa PERM_*) ----------------
+            List<GrantedAuthority> authorities = new ArrayList<>(roleCodes.size() + permCodes.size());
+            roleCodes.forEach(r -> authorities.add(new SimpleGrantedAuthority("ROLE_" + r)));
+            permCodes.forEach(p -> authorities.add(new SimpleGrantedAuthority("PERM_" + p)));
+
+            var authentication = new UsernamePasswordAuthenticationToken(principal, null, authorities);
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
             chain.doFilter(request, response);
 
         } catch (JwtException | IllegalArgumentException e) {
-            // Token inválido -> no autenticamos; Security decidirá 401/403
             SecurityContextHolder.clearContext();
             log.debug("[JwtAuthFilter] JWT invalid: {}", e.getMessage());
             chain.doFilter(request, response);
@@ -156,5 +181,22 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             if (StringUtils.hasText(x)) return x.trim();
         }
         return null;
+    }
+
+    @SafeVarargs
+    private static List<Object> firstNonNullList(List<Object>... lists) {
+        if (lists == null) return null;
+        for (List<Object> l : lists) {
+            if (l != null) return l;
+        }
+        return null;
+    }
+
+    private static Stream<String> normalizeList(List<Object> raw) {
+        if (raw == null) return Stream.empty();
+        return raw.stream()
+                .map(String::valueOf)
+                .map(String::trim)
+                .filter(s -> !s.isBlank());
     }
 }

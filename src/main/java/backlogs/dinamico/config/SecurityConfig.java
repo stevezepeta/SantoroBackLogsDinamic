@@ -83,28 +83,33 @@ public class SecurityConfig {
                     // Ingest por API-KEY (permitAll aquí; ApiKeyTenantFilter lo protege)
                     auth.requestMatchers(HttpMethod.POST, "/api/ingest/**").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
-                    auth.requestMatchers(HttpMethod.POST, "/api/logs/events").permitAll();
-
-                    // Ingest universal por API-KEY (sin JWT)
                     auth.requestMatchers(HttpMethod.POST, "/api/logs", "/api/logs/events").permitAll();
 
                     // Logs: lectura siempre con JWT
-                    auth.requestMatchers("/api/logs/**")
-                            .hasAnyRole("ADMIN","TENANT_OWNER","EXEC","OPS","SUPPORT","AUDITOR");
+                    auth.requestMatchers(HttpMethod.GET, "/api/logs/**")
+                            .hasAuthority("PERM_LOG_READ");
 
-                    // ingest se queda como ya lo tienes (permitAll por API-KEY)
-                    auth.requestMatchers(HttpMethod.POST, "/api/logs/events").permitAll();
+                    // Endpoint Export ------
+                    auth.requestMatchers(HttpMethod.GET, "/api/logs/export/**")
+                            .hasAuthority("PERM_LOG_EXPORT");
 
-                    // Catálogos: autenticados (mínimas excepciones ya arriba)
                     auth.requestMatchers("/api/catalogs/**")
-                            .hasAnyRole("ADMIN","TENANT_OWNER","EXEC","OPS","SUPPORT","AUDITOR");
+                            .hasAuthority("PERM_SETTINGS_MANAGE");
 
-                    // ==== Zonas por rol ====
-                    auth.requestMatchers("/api/admin/**").hasRole("ADMIN");
-                    auth.requestMatchers(HttpMethod.GET,    "/api/core/users/*/roles").hasAnyRole("ADMIN", "TENANT_OWNER");
-                    auth.requestMatchers(HttpMethod.POST,   "/api/core/users/*/roles/**").hasAnyRole("ADMIN", "TENANT_OWNER");
-                    auth.requestMatchers(HttpMethod.DELETE, "/api/core/users/*/roles/**").hasAnyRole("ADMIN", "TENANT_OWNER");
-                    auth.requestMatchers(HttpMethod.PUT,    "/api/core/users/*/roles**").hasAnyRole("ADMIN", "TENANT_OWNER");
+                    auth.requestMatchers("/api/admin/**")
+                            .hasAuthority("PERM_SETTINGS_MANAGE");
+
+                    auth.requestMatchers(HttpMethod.GET, "/api/core/users/*/roles")
+                            .hasAuthority("PERM_USERS_MANAGE");
+
+                    auth.requestMatchers(HttpMethod.POST, "/api/core/users/*/roles/**")
+                            .hasAuthority("PERM_ROLES_ASSIGN");
+
+                    auth.requestMatchers(HttpMethod.DELETE, "/api/core/users/*/roles/**")
+                            .hasAuthority("PERM_ROLES_ASSIGN");
+
+                    auth.requestMatchers(HttpMethod.PUT, "/api/core/users/*/roles**")
+                            .hasAuthority("PERM_ROLES_ASSIGN");
 
                     auth.anyRequest().authenticated();
                 })

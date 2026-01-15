@@ -1,7 +1,8 @@
 package backlogs.dinamico.infra.security;
 
-import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
+import backlogs.dinamico.security.auth.AuthorizationContext;
+import backlogs.dinamico.security.auth.AuthorizationContextService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
@@ -37,7 +38,15 @@ public class JwtTokenService {
     private static final String CLAIM_ORG_ID = "orgId";
     private static final String CLAIM_EMAIL = "email";
     private static final String CLAIM_NAME = "name";
+
+    // Roles actuales
     private static final String CLAIM_ROLES = "roles";
+
+    // Nuevo: permisos + scope
+    private static final String CLAIM_PERMS = "perms";
+    private static final String CLAIM_ORG_WIDE = "orgWide";
+    private static final String CLAIM_SYSTEMS = "systems";
+    private static final String CLAIM_VER = "ver";
 
     @Value("${security.jwt.secret}")
     private String secret;
@@ -52,6 +61,9 @@ public class JwtTokenService {
     private long refreshTtlMinutes;
 
     private Key key;
+
+    // arma roles/permisos/scope desde BD
+    private final AuthorizationContextService authorizationContextService;
 
     @PostConstruct
     void init() {
@@ -71,16 +83,32 @@ public class JwtTokenService {
         log.info("[JWT] HS256 key inicializada ({} bytes)", secretBytes.length);
     }
 
-    // ========= ACCESS =========
-    public String generate(User user, List<Role> roles, ObjectId tenantId) {
-        Instant now = Instant.now();
+    /**
+     * Genera ACCESS token a partir del usuario.
+     * Obtiene roles/permisos/scope desde UserRole/Role (BD).
+     */
+    public String generateAccess(User user) {
+        ObjectId tenantId = user.getTenantId(); // viene en tu modelo
+        if (tenantId == null) {
+            throw new IllegalArgumentException("user.tenantId is required to generate JWT");
+        }
+        AuthorizationContext ctx = authorizationContextService.build(tenantId, user.getId());
+        return generateAccess(user, tenantId, ctx);
+    }
 
-        List<String> roleCodes = (roles == null)
-                ? List.of()
-                : roles.stream().map(Role::getCode).toList();
+    /**
+     * Genera ACCESS token con contexto ya calculado (útil para tests o flows específicos).
+     */
+    public String generateAccess(User user, ObjectId tenantId, AuthorizationContext ctx) {
+        Instant now = Instant.now();
 
         String uid = user.getId() == null ? null : user.getId().toHexString();
         String ten = tenantId == null ? null : tenantId.toHexString();
+
+        List<String> roles = (ctx == null || ctx.getRoles() == null) ? List.of() : ctx.getRoles().stream().sorted().toList();
+        List<String> perms = (ctx == null || ctx.getPermissions() == null) ? List.of() : ctx.getPermissions().stream().sorted().toList();
+        boolean orgWide = ctx != null && ctx.isOrgWide();
+        List<String> systems = (ctx == null || ctx.getAllowedSystems() == null) ? List.of() : ctx.getAllowedSystems().stream().sorted().toList();
 
         return Jwts.builder()
                 .setIssuer(issuer)
@@ -93,7 +121,11 @@ public class JwtTokenService {
                 .claim(CLAIM_ORG_ID, ten)
                 .claim(CLAIM_EMAIL, user.getEmail())
                 .claim(CLAIM_NAME, user.getName())
-                .claim(CLAIM_ROLES, roleCodes)
+                .claim(CLAIM_ROLES, roles)
+                .claim(CLAIM_PERMS, perms)
+                .claim(CLAIM_ORG_WIDE, orgWide)
+                .claim(CLAIM_SYSTEMS, systems) // vacío si orgWide=true
+                .claim(CLAIM_VER, 1)
                 .signWith(SignatureAlgorithm.HS256, key)
                 .compact();
     }
@@ -108,25 +140,38 @@ public class JwtTokenService {
         return c;
     }
 
-    // ========= VERIFY (genérico) =========
     public Claims verify(String token) throws JwtException {
         return Jwts.parser()
                 .setSigningKey(key)
-                .requireIssuer(issuer) // importante
+                .requireIssuer(issuer)
                 .parseClaimsJws(token)
                 .getBody();
     }
 
-    // ========= REFRESH =========
-    public String generateRefresh(User user, List<Role> roles, ObjectId tenantId) {
-        Instant now = Instant.now();
 
-        List<String> roleCodes = (roles == null)
-                ? List.of()
-                : roles.stream().map(Role::getCode).toList();
+    /**
+     * Refresh token también puede incluir roles/perms para UX,
+     * en security real, siempre valida el ACCESS.
+     */
+    public String generateRefresh(User user) {
+        ObjectId tenantId = user.getTenantId();
+        if (tenantId == null) {
+            throw new IllegalArgumentException("user.tenantId is required to generate refresh JWT");
+        }
+        AuthorizationContext ctx = authorizationContextService.build(tenantId, user.getId());
+        return generateRefresh(user, tenantId, ctx);
+    }
+
+    public String generateRefresh(User user, ObjectId tenantId, AuthorizationContext ctx) {
+        Instant now = Instant.now();
 
         String uid = user.getId() == null ? null : user.getId().toHexString();
         String ten = tenantId == null ? null : tenantId.toHexString();
+
+        List<String> roles = (ctx == null || ctx.getRoles() == null) ? List.of() : ctx.getRoles().stream().sorted().toList();
+        List<String> perms = (ctx == null || ctx.getPermissions() == null) ? List.of() : ctx.getPermissions().stream().sorted().toList();
+        boolean orgWide = ctx != null && ctx.isOrgWide();
+        List<String> systems = (ctx == null || ctx.getAllowedSystems() == null) ? List.of() : ctx.getAllowedSystems().stream().sorted().toList();
 
         return Jwts.builder()
                 .setIssuer(issuer)
@@ -139,7 +184,11 @@ public class JwtTokenService {
                 .claim(CLAIM_ORG_ID, ten)
                 .claim(CLAIM_EMAIL, user.getEmail())
                 .claim(CLAIM_NAME, user.getName())
-                .claim(CLAIM_ROLES, roleCodes)
+                .claim(CLAIM_ROLES, roles)
+                .claim(CLAIM_PERMS, perms)
+                .claim(CLAIM_ORG_WIDE, orgWide)
+                .claim(CLAIM_SYSTEMS, systems)
+                .claim(CLAIM_VER, 1)
                 .signWith(SignatureAlgorithm.HS256, key)
                 .compact();
     }
@@ -153,7 +202,7 @@ public class JwtTokenService {
         return c;
     }
 
-    // ========= INVITE =========
+    // INVITE (igual, pero te dejo preparado para systems si lo necesitas)
     public String generateInviteJwt(ObjectId tenantId,
                                     String email,
                                     List<String> roles,
@@ -171,14 +220,14 @@ public class JwtTokenService {
         return Jwts.builder()
                 .setIssuer(issuer)
                 .setSubject(email)
-                .setIssuedAt(Date.from(now))          // FIX
+                .setIssuedAt(Date.from(now))
                 .setExpiration(Date.from(exp))
-                .claim(CLAIM_KIND, KIND_INVITE)       // FIX
+                .claim(CLAIM_KIND, KIND_INVITE)
                 .addClaims(Map.of(
-                        CLAIM_TENANT_ID, ten,         // FIX (antes "tenant")
+                        CLAIM_TENANT_ID, ten,
                         CLAIM_ORG_ID, ten,
                         CLAIM_ROLES, safeRoles,
-                        "tok", rawToken               // recomendación: mejor guardar hash en vez de raw
+                        "tok", rawToken
                 ))
                 .signWith(SignatureAlgorithm.HS256, key)
                 .compact();

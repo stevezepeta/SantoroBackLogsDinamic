@@ -1,10 +1,7 @@
 package backlogs.dinamico.service.core;
 
 import backlogs.dinamico.api.dto.OrgAdminBootstrapReq;
-import backlogs.dinamico.model.core.Organization;
-import backlogs.dinamico.model.core.Role;
-import backlogs.dinamico.model.core.User;
-import backlogs.dinamico.model.core.UserRole;
+import backlogs.dinamico.model.core.*;
 import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
@@ -53,7 +50,7 @@ public class OrganizationAdminService {
             TenantContext.setTenantId(org.getId());
 
             // Se aseguran los roles
-            ensureBaseRoles(org.getId());
+//            ensureBaseRoles(org.getId());
 
             String email = Optional.ofNullable(body.getEmail())
                     .map(s -> s.trim().toLowerCase())
@@ -74,7 +71,7 @@ public class OrganizationAdminService {
                     });
 
             // Asegurar asignacion de un Admin
-            Role adminRole = roleRepo.findByTenantIdAndCode(org.getId(), "ADMIN")
+            Role adminRole = roleRepo.findByTenantIdAndCode(org.getId(), RoleCode.ORG_ADMIN)
                     .orElseThrow(() -> new ResponseStatusException(INTERNAL_SERVER_ERROR, "admin_role_missing"));
 
             boolean hasAdmin = userRoleRepo.existsByTenantIdAndUserIdAndRoleId(org.getId(), admin.getId(), adminRole.getId());
@@ -105,14 +102,14 @@ public class OrganizationAdminService {
         }
     }
 
-    private void ensureBaseRoles(ObjectId tenantId) {
-        ensureRole(tenantId, "ADMIN",  "ADMIN",  "Administrador del tenant");
-        ensureRole(tenantId, "VIEWER", "VIEWER", "Solo lectura de logs");
-        ensureRole(tenantId, "AUDITOR","AUDITOR","Lectura + exportaciones");
-        ensureRole(tenantId, "AGENT",  "AGENT",  "Operador biométrico");
-    }
+//    private void ensureBaseRoles(ObjectId tenantId) {
+//        ensureRole(tenantId, "ADMIN",  "ADMIN",  "Administrador del tenant");
+//        ensureRole(tenantId, "VIEWER", "VIEWER", "Solo lectura de logs");
+//        ensureRole(tenantId, "AUDITOR","AUDITOR","Lectura + exportaciones");
+//        ensureRole(tenantId, "AGENT",  "AGENT",  "Operador biométrico");
+//    }
 
-    private void ensureRole(ObjectId tenantId, String code, String name, String description) {
+    private void ensureRole(ObjectId tenantId, RoleCode code, String name, String description) {
         roleRepo.findByTenantIdAndCode(tenantId, code).orElseGet(() -> {
             var r = new Role();
             r.setTenantId(tenantId);

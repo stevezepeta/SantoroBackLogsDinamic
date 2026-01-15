@@ -1,10 +1,7 @@
 package backlogs.dinamico.controller.core;
 
 import backlogs.dinamico.api.ApiResponse;
-import backlogs.dinamico.model.core.Organization;
-import backlogs.dinamico.model.core.Role;
-import backlogs.dinamico.model.core.User;
-import backlogs.dinamico.model.core.UserRole;
+import backlogs.dinamico.model.core.*;
 import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
@@ -17,7 +14,6 @@ import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -28,6 +24,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.springframework.http.HttpStatus.*;
 
@@ -41,11 +38,8 @@ public class BootstrapController {
     private final RoleRepository roleRepo;
     private final UserRoleRepository userRoleRepo;
     private final PasswordEncoder passwordEncoder;
-
-    // recomendado: validar que el tenant exista
     private final OrganizationRepository orgRepo;
 
-    // opcional recomendado: evita que cualquiera inicialice con solo saber el tenantId
     @Value("${security.bootstrap.secret:}")
     private String bootstrapSecret;
 
@@ -58,33 +52,33 @@ public class BootstrapController {
     ) {
         ObjectId tenantId = parseTenantId(firstNonBlank(xTenant, xTenantId));
 
-        // (opcional) proteger bootstrap con secreto
         if (StringUtils.hasText(bootstrapSecret)) {
             if (!StringUtils.hasText(xSecret) || !bootstrapSecret.equals(xSecret)) {
                 throw new ResponseStatusException(UNAUTHORIZED, "invalid_bootstrap_secret");
             }
         }
 
-        // validar que exista la organización
         Organization org = orgRepo.findById(tenantId)
                 .orElseThrow(() -> new ResponseStatusException(BAD_REQUEST, "tenant_not_found"));
 
-        // evitar re-inicialización
         long c = userRepo.countByTenantId(tenantId);
         if (c > 0) {
             throw new ResponseStatusException(FORBIDDEN, "tenant_already_initialized");
         }
 
         try {
-            // crear roles base (idempotente)
             List<Role> baseRoles = ensureBaseRoles(tenantId);
 
-            Role adminRole = baseRoles.stream()
-                    .filter(r -> "ADMIN".equals(r.getCode()))
+            Role ownerRole = baseRoles.stream()
+                    .filter(r -> r.getCode() == RoleCode.ORG_OWNER)
                     .findFirst()
-                    .orElseThrow();
+                    .orElseThrow(() -> new ResponseStatusException(INTERNAL_SERVER_ERROR, "missing_role_org_owner"));
 
-            // crear usuario admin
+            Role adminRole = baseRoles.stream()
+                    .filter(r -> r.getCode() == RoleCode.ORG_ADMIN)
+                    .findFirst()
+                    .orElseThrow(() -> new ResponseStatusException(INTERNAL_SERVER_ERROR, "missing_role_org_admin"));
+
             User user = User.builder()
                     .tenantId(tenantId)
                     .email(req.email().trim().toLowerCase())
@@ -95,26 +89,21 @@ public class BootstrapController {
 
             user = userRepo.save(user);
 
-            // vincular rol ADMIN (y opcionalmente TENANT_OWNER)
+            // ORG_OWNER
+            userRoleRepo.save(UserRole.builder()
+                    .tenantId(tenantId)
+                    .userId(user.getId())
+                    .roleId(ownerRole.getId())
+                    .allowedSystems(Set.of()) // orgWide => vacío
+                    .build());
+
+            // ORG_ADMIN (opcional, pero útil)
             userRoleRepo.save(UserRole.builder()
                     .tenantId(tenantId)
                     .userId(user.getId())
                     .roleId(adminRole.getId())
+                    .allowedSystems(Set.of())
                     .build());
-
-            var ownerOpt = baseRoles.stream()
-                    .filter(r -> "TENANT_OWNER".equals(r.getCode()))
-                    .findFirst();
-
-            if (ownerOpt.isPresent()) {
-                Role ownerRole = ownerOpt.get();
-                userRoleRepo.save(UserRole.builder()
-                        .tenantId(tenantId)
-                        .userId(user.getId())
-                        .roleId(ownerRole.getId())
-                        .build());
-            }
-
 
             Map<String, Object> data = Map.of(
                     "organization", Map.of(
@@ -126,35 +115,116 @@ public class BootstrapController {
                             "email", user.getEmail(),
                             "name", user.getName()
                     ),
-                    "roles", baseRoles.stream().map(Role::getCode).toList()
+                    "rolesCreated", baseRoles.stream().map(r -> r.getCode().name()).toList()
             );
 
             return ResponseEntity.ok(ApiResponse.ok("Tenant inicializado", "bootstrap_admin", data));
 
         } catch (DuplicateKeyException dup) {
-            // si tienes índices unique, esto evita carreras
             throw new ResponseStatusException(CONFLICT, "duplicate_key_bootstrap");
         }
     }
 
     private List<Role> ensureBaseRoles(ObjectId tenantId) {
         return List.of(
-                ensureRole(tenantId, "ADMIN", "Administrador", "Administrador del tenant"),
-                ensureRole(tenantId, "TENANT_OWNER", "Propietario", "Owner del tenant (gestión de usuarios/roles)"),
-                ensureRole(tenantId, "EXEC", "Ejecutivo", "Dashboard ejecutivo y KPIs"),
-                ensureRole(tenantId, "OPS", "Operación", "Operación y monitoreo"),
-                ensureRole(tenantId, "SUPPORT", "Soporte", "Soporte y troubleshooting"),
-                ensureRole(tenantId, "AUDITOR", "Auditor", "Consulta y auditoría")
-        );
+                ensureRole(tenantId,
+                        RoleCode.ORG_OWNER,
+                        "Owner",
+                        "Dueño del tenant (gestión total)",
+                        true,
+                        false,
+                        Set.of(
+                                PermissionCode.USERS_MANAGE,
+                                PermissionCode.ROLES_ASSIGN,
+                                PermissionCode.SETTINGS_MANAGE,
+                                PermissionCode.LOG_READ,
+                                PermissionCode.LOG_EXPORT
+                        )
+                ),
+                ensureRole(tenantId,
+                        RoleCode.ORG_ADMIN,
+                        "Admin",
+                        "Admin del tenant (operación + catálogos)",
+                        true,
+                        false,
+                        Set.of(
+                                PermissionCode.SETTINGS_MANAGE,
+                                PermissionCode.LOG_READ,
+                                PermissionCode.LOG_EXPORT
+                        )
+                ),
+                ensureRole(tenantId,
+                        RoleCode.EXEC,
+                        "Ejecutivo",
+                        "Dashboard ejecutivo y KPIs",
+                        true,
+                        false,
+                        Set.of(PermissionCode.LOG_READ, PermissionCode.LOG_EXPORT)
+                ),
+                ensureRole(tenantId,
+                        RoleCode.SUPPORT,
+                        "Soporte",
+                        "Soporte y troubleshooting",
+                        true,
+                        false,
+                        Set.of(PermissionCode.LOG_READ)
+                ),
+                ensureRole(tenantId,
+                        RoleCode.AUDITOR,
+                        "Auditor",
+                        "Consulta y auditoría",
+                        true,
+                        false,
+                        Set.of(PermissionCode.LOG_READ, PermissionCode.LOG_EXPORT)
+                ),
+                ensureRole(tenantId,
+                        RoleCode.SYSTEM_MANAGER,
+                        "Jefe de sistema",
+                        "Solo logs de systems asignados",
+                        false,
+                        true,
+                        Set.of(PermissionCode.LOG_READ, PermissionCode.LOG_EXPORT)
+                ),
+                ensureRole(tenantId,
+                        RoleCode.VIEWER,
+                        "Viewer",
+                        "Solo lectura (sin export)",
+                        true,
+                        false,
+                        Set.of(PermissionCode.LOG_READ)
+                ),
+                ensureRole(tenantId,
+                        RoleCode.SUPPORT_TI,
+                        "Soporte TI",
+                        "Soporte técnico plataforma (catálogos + troubleshooting)",
+                        true,
+                        false,
+                        Set.of(
+                                PermissionCode.SETTINGS_MANAGE,
+                                PermissionCode.LOG_READ
+                        )
+                )
+
+                );
     }
 
-    private Role ensureRole(ObjectId tenantId, String code, String name, String description) {
+    private Role ensureRole(ObjectId tenantId,
+                            RoleCode code,
+                            String name,
+                            String description,
+                            boolean orgWide,
+                            boolean systemScoped,
+                            Set<PermissionCode> perms) {
+
         return roleRepo.findByTenantIdAndCode(tenantId, code)
                 .orElseGet(() -> roleRepo.save(Role.builder()
                         .tenantId(tenantId)
                         .code(code)
                         .name(name)
                         .description(description)
+                        .orgWide(orgWide)
+                        .systemScoped(systemScoped)
+                        .permissions(perms)
                         .build()));
     }
 

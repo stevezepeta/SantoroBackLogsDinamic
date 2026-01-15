@@ -10,6 +10,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -28,6 +29,7 @@ public class PassportTimelineService {
     private final LogEventService logEventService;
 
     public LogTimelineResponse timelinePassport(
+            Authentication auth,
             String system,
             String caseId,
             String passportNumber,
@@ -48,7 +50,7 @@ public class PassportTimelineService {
             );
         }
 
-        return logEventService.timeline(system, resolvedCaseId, from, to);
+        return logEventService.timeline(auth, system, resolvedCaseId, from, to);
     }
 
     private String resolveCaseId(

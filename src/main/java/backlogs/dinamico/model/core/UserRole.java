@@ -9,6 +9,10 @@ import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 
 @Data
 @NoArgsConstructor
@@ -42,11 +46,24 @@ public class UserRole extends BaseEntity {
     @Field("role_id")
     private ObjectId roleId;
 
+    @Builder.Default
+    @Field("allowed_systems")
+    private Set<String> allowedSystems = new HashSet<>();
+
     public static UserRole of(ObjectId tenantId, ObjectId userId, ObjectId roleId) {
         return UserRole.builder()
                 .tenantId(tenantId)
                 .userId(userId)
                 .roleId(roleId)
+                .build();
+    }
+
+    public static UserRole of(ObjectId tenantId, ObjectId userId, ObjectId roleId, Set<String> allowedSystems) {
+        return UserRole.builder()
+                .tenantId(tenantId)
+                .userId(userId)
+                .roleId(roleId)
+                .allowedSystems(allowedSystems != null ? allowedSystems : new HashSet<>())
                 .build();
     }
 

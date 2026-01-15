@@ -60,7 +60,7 @@ public class BiometricAuthController {
         var user = userOpt.get();
         var links = userRoleRepo.findByTenantIdAndUserId(tenantId, user.getId());
         List<Role> roles = links.isEmpty() ? List.of() : roleRepo.findAllById(links.stream().map(l -> l.getRoleId()).toList());
-        String jwt = tokens.generate(user, roles, tenantId);
+        String jwt = tokens.generateAccess(user);
 
         return ResponseEntity.ok(Map.of(
                 "ok", true,

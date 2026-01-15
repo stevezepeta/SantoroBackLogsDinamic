@@ -2,8 +2,10 @@ package backlogs.dinamico.service.logs;
 
 import backlogs.dinamico.api.dto.logs.LogEventIngestReq;
 import backlogs.dinamico.api.dto.logs.LogTimelineResponse;
+import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.model.log.LogEvent;
 import backlogs.dinamico.repository.log.LogEventRepository;
+import backlogs.dinamico.security.auth.ScopeGuard;
 import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
@@ -12,6 +14,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -29,6 +32,8 @@ public class LogEventService {
 
     private final LogEventRepository repo;
     private final MongoTemplate mongoTemplate;
+
+    private final ScopeGuard scopeGuard;
 
     // ---------- INGEST ----------
     public LogEvent ingest(LogEventIngestReq req) {
@@ -104,6 +109,7 @@ public class LogEventService {
 
     // -------- SEARCH --------------
     public Page<LogEvent> search(
+            Authentication auth,
             String system,
             Instant from,
             Instant to,
@@ -124,13 +130,16 @@ public class LogEventService {
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
+        AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
+        scopeGuard.requireSystemAccess(user, system);
+
         system = normalizeUpper(system);
         if (!StringUtils.hasText(system)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system is required");
         }
 
         List<Criteria> cs = new ArrayList<>();
-        cs.add(Criteria.where("tenantId").is(tenantId));
+        cs.add(Criteria.where("tenant_id").is(tenantId));
         cs.add(Criteria.where("system").is(system));
 
         if (from != null || to != null) {
@@ -174,18 +183,26 @@ public class LogEventService {
     }
 
     // ---------- DETAIL ----------
-    public LogEvent getById(ObjectId id) {
+    public LogEvent getById(Authentication auth, ObjectId id) {
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
-        return repo.findByIdAndTenantId(id, tenantId)
+        LogEvent ev = repo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "log_not_found"));
+
+        AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
+        scopeGuard.requireSystemAccess(user, ev.getSystem());
+
+        return ev;
     }
 
     // ---------- TIMELINE ----------
-    public LogTimelineResponse timeline(String system, String caseId, Instant from, Instant to) {
+    public LogTimelineResponse timeline(Authentication auth, String system, String caseId, Instant from, Instant to) {
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+
+        AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
+        scopeGuard.requireSystemAccess(user, system);
 
         system = normalizeUpper(system);
         caseId = normalize(caseId);
@@ -195,7 +212,7 @@ public class LogEventService {
         }
 
         List<Criteria> cs = new ArrayList<>();
-        cs.add(Criteria.where("tenantId").is(tenantId));
+        cs.add(Criteria.where("tenant_id").is(tenantId));
         cs.add(Criteria.where("system").is(system));
         cs.add(Criteria.where("caseId").is(caseId));
 

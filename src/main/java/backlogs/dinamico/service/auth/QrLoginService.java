@@ -5,11 +5,8 @@ import backlogs.dinamico.api.dto.auth.QrTokenResponse;
 import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.infra.security.JwtTokenService;
 import backlogs.dinamico.model.auth.QrLoginSession;
-import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
 import backlogs.dinamico.repository.auth.QrLoginSessionRepository;
-import backlogs.dinamico.repository.core.RoleRepository;
-import backlogs.dinamico.repository.core.UserRoleRepository;
 import backlogs.dinamico.service.core.UserService;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
@@ -18,8 +15,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.List;
-import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -30,10 +25,8 @@ public class QrLoginService {
     private final UserService userService;
     private final JwtTokenService jwtTokenService;
     private final QrLoginNotifier qrLoginNotifier;
-    private final UserRoleRepository userRoleRepo;
-    private final RoleRepository roleRepo;
 
-    // Duracion del token 2 min
+    // Duración del token 2 min
     private static final Duration QR_TOKEN_TTL = Duration.ofMinutes(2);
 
     public QrTokenResponse createQrToken() {
@@ -71,23 +64,21 @@ public class QrLoginService {
             );
         }
 
-        // Se obtienen datos desde el JWT
-        ObjectId tenantId = authUser.tenantId();
-        String email = authUser.email();
+        // Datos desde el JWT (del móvil)
+        ObjectId tenantId = authUser.getTenantId();
+        String email = authUser.getEmail();
 
         if (tenantId == null || email == null || email.isBlank()) {
             qrLoginNotifier.notifyError(qrToken);
             throw new IllegalArgumentException("Token sin tenantId/email");
         }
 
-        // 1) Cargar la sesión de QR
+        // 1) Cargar sesión QR
         QrLoginSession session = qrRepo.findByQrToken(qrToken)
                 .orElseThrow(() -> {
-                    // QR inexistente o inválido
                     qrLoginNotifier.notifyError(qrToken);
                     return new IllegalArgumentException("Token QR inválido");
                 });
-
 
         Instant now = Instant.now();
 
@@ -96,7 +87,6 @@ public class QrLoginService {
             throw new IllegalArgumentException("QR token already used");
         }
 
-        // Validar expiración
         if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(now)) {
             session.setUsed(true);
             qrRepo.save(session);
@@ -105,7 +95,7 @@ public class QrLoginService {
             throw new IllegalArgumentException("QR token expired");
         }
 
-        // Se recupera el User
+        // 2) Buscar usuario
         User user = userService.findByEmail(tenantId, email)
                 .orElseThrow(() -> {
                     qrLoginNotifier.notifyError(qrToken);
@@ -117,29 +107,21 @@ public class QrLoginService {
             throw new IllegalStateException("inactive_user");
         }
 
-        // Cargar roles
-        List<Role> roles = userRoleRepo.findByTenantIdAndUserId(tenantId, user.getId())
-                .stream()
-                .map(link -> roleRepo.findById(link.getRoleId()).orElse(null))
-                .filter(Objects::nonNull)
-                .toList();
-
-        // Generar tokens con roles
-        String accessToken = jwtTokenService.generate(user, roles, tenantId);
-        String refreshToken = jwtTokenService.generateRefresh(user, roles, tenantId);
+        // Generar tokens NUEVOS (roles+perms+scope desde BD)
+        String accessToken = jwtTokenService.generateAccess(user);
+        String refreshToken = jwtTokenService.generateRefresh(user);
 
         LoginResponse resp = new LoginResponse(accessToken, refreshToken, "Bearer");
 
-        // Marcar sesion como usada (one-time)
+        // 4) Marcar sesión como usada
         session.setUsed(true);
         session.setTenantId(tenantId.toHexString());
         session.setEmail(email);
         qrRepo.save(session);
 
-        // Notificacion a la PC
+        // 5) Notificación a la PC
         qrLoginNotifier.notifySuccess(qrToken, resp);
 
         return resp;
     }
-
 }

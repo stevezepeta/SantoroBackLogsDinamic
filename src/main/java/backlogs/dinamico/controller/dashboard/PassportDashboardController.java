@@ -225,12 +225,15 @@ public class PassportDashboardController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
 
             @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+
+            Authentication auth
     ) {
         Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
 
         var data = timelineService.timelinePassport(
+                auth,
                 PASSPORT_SYSTEM,
                 normalize(caseId),
                 normalize(passportNumber),

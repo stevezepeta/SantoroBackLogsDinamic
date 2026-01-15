@@ -71,12 +71,15 @@ public class LogEventController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) String sortBy,
-            @RequestParam(defaultValue = "DESC") String sortDir
+            @RequestParam(defaultValue = "DESC") String sortDir,
+
+            Authentication auth
     ) {
         Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
 
         var result = service.search(
+                auth,
                 system,
                 from,
                 to,
@@ -107,8 +110,8 @@ public class LogEventController {
     }
 
     @GetMapping("/events/{id}")
-    public ApiResponse<LogEvent> getById(@PathVariable String id) {
-        LogEvent ev = service.getById(new ObjectId(id));
+    public ApiResponse<LogEvent> getById(@PathVariable String id, Authentication auth) {
+        LogEvent ev = service.getById(auth, new ObjectId(id));
         return ApiResponse.ok("Detalle del log", "log_event_detail", ev);
     }
 
@@ -121,12 +124,14 @@ public class LogEventController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
 
             @RequestParam(required = false)
-            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+
+            Authentication auth
     ) {
         Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
 
-        var data = service.timeline(system, caseId, from, to);
+        var data = service.timeline(auth, system, caseId, from, to);
         return ApiResponse.ok("Timeline", "log_timeline", data);
     }
 

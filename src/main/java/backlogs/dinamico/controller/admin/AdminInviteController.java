@@ -31,18 +31,18 @@ public class AdminInviteController {
     public record InviteReq(
             @NotBlank @Email String email,
             List<String> roles,
+            List<String> systems,   // NUEVO
             @Min(1) Long ttlHours
     ) {}
 
     @PostMapping
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAuthority('PERM_USERS_MANAGE') or hasAuthority('PERM_ROLES_ASSIGN')")
     public ApiResponse<Map<String, Object>> createInvite(
             @AuthenticationPrincipal AuthUser me,
             @Valid @RequestBody InviteReq req
     ) {
 
         long ttl = (req.ttlHours() == null || req.ttlHours() <= 0) ? 48L : req.ttlHours();
-
         String email = req.email().trim().toLowerCase(Locale.ROOT);
 
         List<String> roles = (req.roles() == null || req.roles().isEmpty())
@@ -53,20 +53,30 @@ public class AdminInviteController {
                 .distinct()
                 .toList();
 
+        // systems normalizados (UPPER) y sin duplicados
+        List<String> systems = (req.systems() == null)
+                ? List.of()
+                : req.systems().stream()
+                .filter(StringUtils::hasText)
+                .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .toList();
+
         UserInvite inv = invites.create(
-                me.tenantId(),
+                me.getTenantId(),
                 email,
                 roles,
+                systems,
                 Duration.ofHours(ttl)
         );
 
-        Map<String, Object> orgBlock = orgRepo.findById(me.tenantId())
+        Map<String, Object> orgBlock = orgRepo.findById(me.getTenantId())
                 .<Map<String, Object>>map(o -> Map.of(
                         "id", o.getId().toHexString(),
                         "name", o.getName()
                 ))
                 .orElseGet(() -> Map.of(
-                        "id", me.tenantId().toHexString(),
+                        "id", me.getTenantId().toHexString(),
                         "name", "(unknown)"
                 ));
 
@@ -76,7 +86,8 @@ public class AdminInviteController {
                 "organization", orgBlock,
                 "email",        inv.getEmail(),
                 "roles",        inv.getRoles(),
-                "inviteToken",  inv.getToken(),     // en PROD idealmente NO regresarlo, solo mandar correo
+                "systems",      inv.getSystems(),
+                "inviteToken",  inv.getToken(),
                 "inviteLink",   inviteLink,
                 "expiresAt",    inv.getExpiresAt()
         );

@@ -31,6 +31,7 @@ public class InviteAdminController {
                 tenantId,
                 req.email().trim().toLowerCase(),
                 req.roles(),
+                req.systems(),
                 Duration.ofHours(req.ttlHours() == null ? 24 : req.ttlHours())
         );
 
@@ -44,6 +45,7 @@ public class InviteAdminController {
     public record CreateInviteReq(
             @NotBlank @Email String email,
             List<String> roles,
+            List<String> systems,
             Long ttlHours
     ) {}
 }

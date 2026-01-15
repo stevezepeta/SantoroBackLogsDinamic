@@ -12,6 +12,8 @@ import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserRepository;
 import backlogs.dinamico.repository.core.UserRoleRepository;
+import backlogs.dinamico.security.auth.AuthorizationContext;
+import backlogs.dinamico.security.auth.AuthorizationContextService;
 import backlogs.dinamico.service.auth.QrLoginService;
 import backlogs.dinamico.service.core.UserService;
 import io.jsonwebtoken.Claims;
@@ -47,6 +49,8 @@ public class WebAuthController {
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService tokens;
 
+    private final AuthorizationContextService authorizationContextService;
+
     private final QrLoginService qrLoginService;
 
     // -------------------- Login --------------------
@@ -75,10 +79,12 @@ public class WebAuthController {
             throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "user_without_tenant");
         }
 
-        List<Role> roles = loadRoles(tenantId, u.getId());
+        // Contexto completo (roles + perms + scope)
+        AuthorizationContext ctx = authorizationContextService.build(tenantId, u.getId());
 
-        String accessToken = tokens.generate(u, roles, tenantId);
-        String refreshToken = tokens.generateRefresh(u, roles, tenantId);
+        // Tokens nuevos (ya incluyen ctx)
+        String accessToken  = tokens.generateAccess(u, tenantId, ctx);
+        String refreshToken = tokens.generateRefresh(u, tenantId, ctx);
 
         Map<String, Object> data = Map.of(
                 "organization", orgBlock(tenantId),
@@ -87,7 +93,16 @@ public class WebAuthController {
                         "email", u.getEmail(),
                         "name", u.getName()
                 ),
-                "roles", roles.stream().map(Role::getCode).toList(),
+
+                // útil para UI sin decodificar JWT
+                "authz", Map.of(
+                        "roles", ctx.getRoles(),                 // ["ORG_ADMIN", ...]
+                        "permissions", ctx.getPermissions(),     // ["LOG_READ", ...]
+                        "orgWide", ctx.isOrgWide(),              // true/false
+                        "systems", ctx.getAllowedSystems(),      // ["BANK_PA", ...] (vacío si orgWide)
+                        "ver", 1
+                ),
+
                 "accessToken", accessToken,
                 "refreshToken", refreshToken
         );
@@ -95,14 +110,14 @@ public class WebAuthController {
         return ApiResponse.ok("Login exitoso", null, data);
     }
 
+
     // -------------------- Refresh --------------------
     @PostMapping("/refresh")
-    public ResponseEntity<ApiResponse> refresh(@Valid @RequestBody RefreshTokenRequest req) {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> refresh(@Valid @RequestBody RefreshTokenRequest req) {
 
         try {
             Claims claims = tokens.verifyRefresh(req.refreshToken());
 
-            // preferimos subject como fuente principal
             String email = claims.getSubject();
             if (!StringUtils.hasText(email)) {
                 email = claims.get("email", String.class);
@@ -116,25 +131,40 @@ public class WebAuthController {
 
             ObjectId tenantId = new ObjectId(tenantIdHex);
 
-            // cargar usuario desde tenant
             User user = userService.findByEmail(tenantId, email)
                     .orElseThrow(() -> new IllegalStateException("User not found for refresh token"));
 
             assertActive(user);
 
-            // IMPORTANTE: recargar roles para que el nuevo access token traiga permisos
-            List<Role> roles = loadRoles(tenantId, user.getId());
+            // authz actualizado (por si cambiaron roles/scope mientras el usuario estaba logueado)
+            var ctx = authorizationContextService.build(tenantId, user.getId());
 
-            String newAccessToken = tokens.generate(user, roles, tenantId);
+            // nuevo access token (incluye roles/perms/scope en claims)
+            String newAccessToken = tokens.generateAccess(user);
 
-            // si NO quieres rotación de refresh, regresamos el mismo
+            // sin rotación de refresh (igual que ahorita)
             String refreshToken = req.refreshToken();
 
-            LoginResponse resp = new LoginResponse(newAccessToken, refreshToken, "Bearer");
-
-            return ResponseEntity.ok(
-                    ApiResponse.success("Token refreshed", resp)
+            // MISMA estructura + authz
+            Map<String, Object> data = Map.of(
+                    "accessToken", newAccessToken,
+                    "refreshToken", refreshToken,
+                    "tokenType", "Bearer",
+                    "authz", Map.of(
+                            "roles", ctx.getRoles(),
+                            "permissions", ctx.getPermissions(),
+                            "orgWide", ctx.isOrgWide(),
+                            "systems", ctx.getAllowedSystems(),
+                            "ver", 1
+                    )
             );
+
+            // Aquí tienes 2 opciones:
+            // A) Mantener EXACTO tu "code" como hoy (para que se vea igual en Postman)
+            return ResponseEntity.ok(ApiResponse.success("Token refreshed", data));
+
+            // B) O hacerlo más correcto (code estable + message):
+            // return ResponseEntity.ok(ApiResponse.success("token_refreshed", "Token refreshed", data));
 
         } catch (JwtException | IllegalArgumentException | IllegalStateException ex) {
             return ResponseEntity.status(UNAUTHORIZED)

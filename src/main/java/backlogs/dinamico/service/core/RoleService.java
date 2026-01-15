@@ -8,7 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.*;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -62,53 +61,5 @@ public class RoleService {
       throw new ResponseStatusException(NOT_FOUND, "role_not_found");
     }
     return r;
-  }
-
-  // ------- CREATE ----------
-  public Role create(Role body) {
-    String tenantHex = TenantContext.getTenantIdHex();
-    if (!StringUtils.hasText(tenantHex)) {
-      throw new ResponseStatusException(BAD_REQUEST, "missing_tenant_ctx");
-    }
-    ObjectId tenantId = new ObjectId(tenantHex);
-
-    if (body.getTenantId() == null) {
-      body.setTenantId(tenantId);
-    } else if (!tenantId.equals(body.getTenantId())) {
-      throw new ResponseStatusException(BAD_REQUEST, "invalid_tenant_in_payload");
-    }
-
-    // Se normaliza code y name
-    if (StringUtils.hasText(body.getCode())) {
-      body.setCode(body.getCode().trim());
-    }
-    if (StringUtils.hasText(body.getName())) {
-      body.setName(body.getName().trim());
-    }
-
-    if (StringUtils.hasText(body.getCode())) {
-      repo.findByTenantIdAndCode(tenantId, body.getCode()).ifPresent(x -> {
-        throw new ResponseStatusException(BAD_REQUEST, "role_code_already_exists");
-      });
-    }
-
-    return repo.save(body);
-  }
-
-  // ------- DELETE --------
-  public void delete(ObjectId id) {
-    String tenantHex = TenantContext.getTenantIdHex();
-    if (!StringUtils.hasText(tenantHex)) {
-      throw new ResponseStatusException(BAD_REQUEST, "missing_tenant_ctx");
-    }
-    ObjectId tenantId = new ObjectId(tenantHex);
-
-    Role existing = repo.findById(id)
-            .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "role_not_found"));
-
-    if (existing.getTenantId() == null || !tenantId.equals(existing.getTenantId())) {
-      throw new ResponseStatusException(NOT_FOUND, "role_not_found");
-    }
-    repo.deleteById(id);
   }
 }

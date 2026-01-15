@@ -44,7 +44,7 @@ import static backlogs.dinamico.security.KeyHasher.sha256b64;
 public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
   private final ApiKeyRep apiKeyRepo;
-  private final JwtTokenService jwtTokenService; // ✅ usar tu servicio (JJWT viejo compatible)
+  private final JwtTokenService jwtTokenService;
 
   @Value("${multitenant.strategy:collection-per-tenant}") // single | collection-per-tenant | database-per-tenant
   private String strategy;
@@ -131,7 +131,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       return;
     }
 
-    // 1) ✅ Si viene Bearer: resolver tenant desde JWT (NO pedir X-Api-Key)
+    // 1) Si viene Bearer: resolver tenant desde JWT (NO pedir X-Api-Key)
     if (bearerToken != null) {
       ObjectId tenantId = tryResolveTenantFromJwt(bearerToken);
       if (tenantId == null) {
