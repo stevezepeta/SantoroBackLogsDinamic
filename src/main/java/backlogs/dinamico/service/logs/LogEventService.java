@@ -30,10 +30,31 @@ public class LogEventService {
 
     private static final String COLLECTION = "log_events";
 
+    private static final int ALL_LIMIT = 5;                    // Limite de logs que mostrara
+    public int getAllLimit() {
+        return ALL_LIMIT;
+    }
+
     private final LogEventRepository repo;
     private final MongoTemplate mongoTemplate;
 
     private final ScopeGuard scopeGuard;
+
+    //  ---------------- ALL LOG'S -----------------
+    public List<LogEvent> all(Authentication auth) {
+        return search(
+                auth,
+                null,   // system null => modo ALL
+                null, null,
+                null, null, null, null, null,
+                null, null, null,
+                null,
+                0,
+                ALL_LIMIT,
+                "eventTime",
+                "DESC"
+        ).getContent();
+    }
 
     // ---------- INGEST ----------
     public LogEvent ingest(LogEventIngestReq req) {
@@ -128,20 +149,53 @@ public class LogEventService {
             String sortDir
     ) {
         ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+        }
 
         AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
-        scopeGuard.requireSystemAccess(user, system);
-
-        system = normalizeUpper(system);
-        if (!StringUtils.hasText(system)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system is required");
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unauthenticated");
         }
+
+        // Normaliza system si viene
+        system = normalizeUpper(system);
 
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
-        cs.add(Criteria.where("system").is(system));
 
+        // ----------------------------
+        // SCOPE / SYSTEM FILTER
+        // ----------------------------
+        if (StringUtils.hasText(system)) {
+            // Modo normal: 1 system
+            scopeGuard.requireSystemAccess(user, system);
+            cs.add(Criteria.where("system").is(system));
+
+        } else {
+            // Modo ALL: todos los systems visibles
+            if (user.isOrgWide()) {
+                // orgWide
+            } else {
+                var allowed = (user.getAllowedSystems() == null) ? List.<String>of() :
+                        user.getAllowedSystems().stream()
+                                .filter(StringUtils::hasText)
+                                .map(s -> s.trim().toUpperCase(java.util.Locale.ROOT))
+                                .distinct()
+                                .toList();
+
+                if (allowed.isEmpty()) {
+                    // No tiene systems asignados y no es orgWide => no ve nada
+                    return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
+                }
+
+                cs.add(Criteria.where("system").in(allowed));
+            }
+        }
+
+        // ----------------------------
+        // FILTROS (los de siempre)
+        // ----------------------------
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
@@ -181,6 +235,7 @@ public class LogEventService {
 
         return new PageImpl<>(items, pageable, total);
     }
+
 
     // ---------- DETAIL ----------
     public LogEvent getById(Authentication auth, ObjectId id) {

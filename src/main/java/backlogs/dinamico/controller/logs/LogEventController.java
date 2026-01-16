@@ -135,4 +135,18 @@ public class LogEventController {
         return ApiResponse.ok("Timeline", "log_timeline", data);
     }
 
+    @GetMapping("/events/all")
+    public ApiResponse<Map<String, Object>> all(Authentication auth) {
+
+        var items = service.all(auth);
+
+        Map<String, Object> data = Map.of(
+                "items", items,
+                "size", items.size()
+        );
+
+        return ApiResponse.ok("Logs (ALL)", "log_events_all", data);
+    }
+
+
 }
