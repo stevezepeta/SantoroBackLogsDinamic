@@ -136,17 +136,34 @@ public class LogEventController {
     }
 
     @GetMapping("/events/all")
-    public ApiResponse<Map<String, Object>> all(Authentication auth) {
+    public ApiResponse<Map<String, Object>> all(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
 
-        var items = service.all(auth);
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
+
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "1000") int size,
+            @RequestParam(required = false) String sortBy,
+            @RequestParam(defaultValue = "DESC") String sortDir,
+
+            Authentication auth
+    ) {
+        Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+        Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
+
+        var result = service.all(auth, from, to, page, size, sortBy, sortDir);
 
         Map<String, Object> data = Map.of(
-                "items", items,
-                "size", items.size()
+                "items", result.getContent(),
+                "page", result.getNumber(),
+                "size", result.getSize(),
+                "totalElements", result.getTotalElements(),
+                "totalPages", result.getTotalPages()
         );
 
         return ApiResponse.ok("Logs (ALL)", "log_events_all", data);
     }
-
 
 }

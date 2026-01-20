@@ -5,12 +5,12 @@ import org.bson.types.ObjectId;
 
 public final class TenantContext {
 
-    // Contexto por request (ThreadLocal) con valor por defecto vacío
-    private static final ThreadLocal<Ctx> CURRENT = ThreadLocal.withInitial(Ctx::empty);
+    private static final ThreadLocal<Ctx> CURRENT =
+            ThreadLocal.withInitial(Ctx::empty);
 
     private TenantContext() {}
 
-    /** Datos del contexto (amplíalo si lo necesitas). */
+    // ================= CONTEXT =================
     @Getter
     @Setter
     @NoArgsConstructor
@@ -18,29 +18,42 @@ public final class TenantContext {
     @Builder(toBuilder = true)
     public static class Ctx {
 
-        // --- mínimos / multitenant ---
+        // --- multitenant ---
         private ObjectId tenantId;
         private ObjectId organizationId;
 
-        // --- opcionales (enriquecidos) ---
+        // --- JWT ---
         private ObjectId userId;
         private ObjectId personId;
-        private String   email;
-        private String   name;
+        private String email;
+        private String name;
 
-        // --- otros campos útiles ---
+        // --- auth origin ---
+        // JWT | API_KEY
+        private String authKind;
+
+        // --- ingest (API KEY) ---
         private ObjectId systemId;
         private ObjectId environmentId;
-        private String   dbName;
-        private String   collectionSuffix;
 
-        static Ctx empty() { return new Ctx(); }
+        // --- routing ---
+        private String dbName;
+        private String collectionSuffix;
 
-        public boolean hasTenant() { return tenantId != null; }
+        static Ctx empty() {
+            return new Ctx();
+        }
+
+        public boolean isJwt() {
+            return "JWT".equalsIgnoreCase(authKind) || userId != null;
+        }
+
+        public boolean isApiKey() {
+            return "API_KEY".equalsIgnoreCase(authKind) || systemId != null;
+        }
     }
 
-    // ------------ API básica ------------
-    /** Establece todo el contexto. */
+    // ================= CORE =================
     public static void set(Ctx ctx) {
         CURRENT.set(ctx != null ? ctx : Ctx.empty());
     }
@@ -49,12 +62,35 @@ public final class TenantContext {
         return CURRENT.get();
     }
 
-    /** Limpia el contexto del request actual. */
     public static void clear() {
         CURRENT.remove();
     }
 
-    // ------------ Tenant helpers ------------
+    // ================= TENANT HEX HELPERS =================
+    public static void setTenantIdHex(String hex) {
+        if (hex != null && ObjectId.isValid(hex)) {
+            setTenantId(new ObjectId(hex));
+        }
+    }
+
+    public static String getTenantIdHex() {
+        ObjectId id = getTenantId();
+        return (id != null) ? id.toHexString() : null;
+    }
+
+    // ================= ORG HEX HELPERS =================
+    public static void setOrganizationIdHex(String hex) {
+        if (hex != null && ObjectId.isValid(hex)) {
+            setOrganizationId(new ObjectId(hex));
+        }
+    }
+
+    public static String getOrganizationIdHex() {
+        ObjectId id = getOrganizationId();
+        return (id != null) ? id.toHexString() : null;
+    }
+
+    // ================= TENANT =================
     public static void setTenantId(ObjectId id) {
         CURRENT.get().setTenantId(id);
     }
@@ -63,23 +99,15 @@ public final class TenantContext {
         return CURRENT.get().getTenantId();
     }
 
-    /** Útil para evitar repetir validaciones en services. */
     public static ObjectId requireTenantId() {
         ObjectId id = getTenantId();
-        if (id == null) throw new IllegalStateException("Tenant no resuelto en contexto");
+        if (id == null) {
+            throw new IllegalStateException("Tenant no resuelto en contexto");
+        }
         return id;
     }
 
-    public static void setTenantIdHex(String hex) {
-        if (hex != null && ObjectId.isValid(hex)) setTenantId(new ObjectId(hex));
-    }
-
-    public static String getTenantIdHex() {
-        ObjectId id = getTenantId();
-        return (id != null) ? id.toHexString() : null;
-    }
-
-    // ------- OrganizationId helpers ------
+    // ================= ORGANIZATION =================
     public static void setOrganizationId(ObjectId id) {
         CURRENT.get().setOrganizationId(id);
     }
@@ -88,16 +116,24 @@ public final class TenantContext {
         return CURRENT.get().getOrganizationId();
     }
 
-    public static void setOrganizationIdHex(String hex) {
-        if (hex != null && ObjectId.isValid(hex)) setOrganizationId(new ObjectId(hex));
+    // ================= AUTH KIND =================
+    public static void setAuthKind(String kind) {
+        CURRENT.get().setAuthKind(kind);
     }
 
-    public static String getOrganizationIdHex() {
-        ObjectId id = getOrganizationId();
-        return (id != null) ? id.toHexString() : null;
+    public static String getAuthKind() {
+        return CURRENT.get().getAuthKind();
     }
 
-    // ------------ System/Environment helpers ------------
+    public static boolean isJwt() {
+        return CURRENT.get().isJwt();
+    }
+
+    public static boolean isApiKey() {
+        return CURRENT.get().isApiKey();
+    }
+
+    // ================= SYSTEM / ENV =================
     public static void setSystemId(ObjectId id) {
         CURRENT.get().setSystemId(id);
     }
@@ -114,7 +150,7 @@ public final class TenantContext {
         return CURRENT.get().getEnvironmentId();
     }
 
-    // ------------ Routing helpers (db/collection) ------------
+    // ================= ROUTING =================
     public static void setDbName(String db) {
         CURRENT.get().setDbName(db);
     }
@@ -131,12 +167,18 @@ public final class TenantContext {
         return CURRENT.get().getCollectionSuffix();
     }
 
-    // ------------ Convenience: set rápido para ingesta (API Key) ------------
-    public static void setForIngest(ObjectId tenantId, ObjectId systemId, ObjectId environmentId) {
+    // ================= INGEST HELPER =================
+    public static void setForIngest(
+            ObjectId tenantId,
+            ObjectId systemId,
+            ObjectId environmentId
+    ) {
         set(Ctx.builder()
                 .tenantId(tenantId)
+                .organizationId(tenantId)
                 .systemId(systemId)
                 .environmentId(environmentId)
+                .authKind("API_KEY")
                 .build());
     }
 }

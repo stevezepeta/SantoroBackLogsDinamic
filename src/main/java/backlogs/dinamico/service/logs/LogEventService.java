@@ -23,44 +23,107 @@ import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
 
-
 @Service
 @RequiredArgsConstructor
 public class LogEventService {
 
     private static final String COLLECTION = "log_events";
 
-    private static final int ALL_LIMIT = 5;                    // Limite de logs que mostrara
-    public int getAllLimit() {
-        return ALL_LIMIT;
-    }
-
     private final LogEventRepository repo;
     private final MongoTemplate mongoTemplate;
-
     private final ScopeGuard scopeGuard;
 
     //  ---------------- ALL LOG'S -----------------
-    public List<LogEvent> all(Authentication auth) {
-        return search(
-                auth,
-                null,   // system null => modo ALL
-                null, null,
-                null, null, null, null, null,
-                null, null, null,
-                null,
-                0,
-                ALL_LIMIT,
-                "eventTime",
-                "DESC"
-        ).getContent();
+    public Page<LogEvent> all(
+            Authentication auth,
+            Instant from,
+            Instant to,
+            int page,
+            int size,
+            String sortBy,
+            String sortDir
+    ) {
+        ObjectId tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+        }
+
+        AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
+        if (user == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unauthenticated");
+        }
+
+        List<Criteria> cs = new ArrayList<>();
+        cs.add(Criteria.where("tenant_id").is(tenantId));
+
+        // SCOPE: todos los systems visibles
+        if (!user.isOrgWide()) {
+            var allowed = (user.getAllowedSystems() == null) ? List.<String>of() :
+                    user.getAllowedSystems().stream()
+                            .filter(StringUtils::hasText)
+                            .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                            .distinct()
+                            .toList();
+
+            if (allowed.isEmpty()) {
+                return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
+            }
+            cs.add(Criteria.where("system").in(allowed));
+        }
+
+        // FECHAS
+        if (from != null || to != null) {
+            Criteria time = Criteria.where("eventTime");
+            if (from != null) time = time.gte(from);
+            if (to != null) time = time.lt(to); // exclusivo
+            cs.add(time);
+        }
+
+        Criteria finalC = new Criteria().andOperator(cs.toArray(new Criteria[0]));
+        Query q = new Query(finalC);
+
+        Sort.Direction dir = "ASC".equalsIgnoreCase(sortDir) ? Sort.Direction.ASC : Sort.Direction.DESC;
+        String sortField = StringUtils.hasText(sortBy) ? sortBy : "eventTime";
+
+        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sortField));
+        q.with(pageable);
+
+        List<LogEvent> items = mongoTemplate.find(q, LogEvent.class, COLLECTION);
+        long total = mongoTemplate.count(Query.of(q).limit(-1).skip(-1), COLLECTION);
+
+        return new PageImpl<>(items, pageable, total);
     }
 
-    // ---------- INGEST ----------
+    // ---------- INGEST (SOLO API KEY) ----------
     public LogEvent ingest(LogEventIngestReq req) {
-        ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
+        // 0) Body obligatorio
+        if (req == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body_required");
+        }
+
+        // 1) Tenant obligatorio (lo setea ApiKeyTenantFilter)
+        ObjectId tenantId = TenantContext.getTenantId();
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+        }
+
+        // 2) Ingest SOLO por API KEY
+        //    - Si llega JWT humano (TenantContext trae userId o authKind=JWT) => forbid
+        //    - Si llega header X-Tenant solamente (TenantResolutionFilter) => unauthorized
+        if (!TenantContext.isApiKey()) {
+            // Diferenciamos mensajes para debug
+            if (TenantContext.isJwt() || TenantContext.get().getUserId() != null) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "human_jwt_cannot_ingest_logs");
+            }
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "api_key_required_for_ingest");
+        }
+
+        // 3) (Opcional) validar scope de ingesta si tu ScopeGuard lo maneja
+        //    Si NO lo usas, puedes comentar esta línea.
+        // scopeGuard.requireIngestScope(); // <- si existe en tu proyecto
+
+        // 4) Validaciones normales
         validateGeo(req.geo());
 
         String system = normalizeUpper(req.system());
@@ -68,7 +131,7 @@ public class LogEventService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system is required");
         }
 
-        String env = normalize(req.environment());
+        String env    = normalize(req.environment()); // puede ser null
         String caseId = normalize(req.caseId());
 
         Instant eventTime = (req.eventTime() != null) ? req.eventTime() : Instant.now();
@@ -114,7 +177,11 @@ public class LogEventService {
                                 req.http().latencyMs()
                         ))
                 .sla(req.sla() == null ? null :
-                        new LogEvent.SlaInfo(req.sla().startTime(), req.sla().endTime(), req.sla().elapsedSeconds()))
+                        new LogEvent.SlaInfo(
+                                req.sla().startTime(),
+                                req.sla().endTime(),
+                                req.sla().elapsedSeconds()
+                        ))
                 .reason(req.reason() == null ? null :
                         new LogEvent.ReasonInfo(
                                 normalizeUpper(req.reason().code()),
@@ -164,9 +231,7 @@ public class LogEventService {
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
 
-        // ----------------------------
         // SCOPE / SYSTEM FILTER
-        // ----------------------------
         if (StringUtils.hasText(system)) {
             // Modo normal: 1 system
             scopeGuard.requireSystemAccess(user, system);
@@ -185,7 +250,6 @@ public class LogEventService {
                                 .toList();
 
                 if (allowed.isEmpty()) {
-                    // No tiene systems asignados y no es orgWide => no ve nada
                     return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
                 }
 
@@ -193,9 +257,7 @@ public class LogEventService {
             }
         }
 
-        // ----------------------------
         // FILTROS (los de siempre)
-        // ----------------------------
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
@@ -235,7 +297,6 @@ public class LogEventService {
 
         return new PageImpl<>(items, pageable, total);
     }
-
 
     // ---------- DETAIL ----------
     public LogEvent getById(Authentication auth, ObjectId id) {
@@ -340,12 +401,11 @@ public class LogEventService {
         Double lon = c.get(0);
         Double lat = c.get(1);
 
-        if(lon == null || lat == null) {
+        if (lon == null || lat == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "geo.coordinates contiene null");
         }
         if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "geo.coordinates fuera de rango válido");
         }
     }
-
 }

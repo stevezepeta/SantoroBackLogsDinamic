@@ -1,6 +1,6 @@
 # application-dev.yml
 multitenant:
-  require-api-key: false        
+  require-api-key: true
   strategy: collection-per-tenant
   base-database: logs_system
   log-collection: log_events

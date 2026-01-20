@@ -5,8 +5,10 @@ package backlogs.dinamico.model.ingest;
 import backlogs.dinamico.model.base.BaseEntity;
 import lombok.*;
 import org.bson.types.ObjectId;
+import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
+import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
 
@@ -21,9 +23,15 @@ import java.util.List;
 @Builder
 @Document(collection = "api_keys")
 @CompoundIndexes({
-        @CompoundIndex(name = "ix_tenant_sys_env_status",
-                def = "{ 'tenant_id': 1, 'system_id': 1, 'environment_id': 1, 'status': 1 }"),
-        @CompoundIndex(name = "ux_api_key_hash", def = "{ 'key_hash': 1 }", unique = true)
+        @CompoundIndex(
+                name = "ux_api_key_hash",
+                def = "{ 'key_hash': 1 }",
+                unique = true
+        ),
+        @CompoundIndex(
+                name = "ix_api_key_tenant_status",
+                def = "{ 'tenant_id': 1, 'status': 1 }"
+        )
 })
 public class ApiKey extends BaseEntity {
 
@@ -45,6 +53,8 @@ public class ApiKey extends BaseEntity {
 
     private String status;
 
+    private Instant createdAt;
+
     @Field("last_used_at")
     private Instant lastUsedAt;
 
@@ -56,8 +66,11 @@ public class ApiKey extends BaseEntity {
 
     // ------ Helper Opcional ------
     public boolean isActiveNow() {
-        return "active".equalsIgnoreCase(status)
-                && (expiresAt == null || expiresAt.isAfter(Instant.now()));
+        if (!"active".equalsIgnoreCase(status)) return false;
+        if (expiresAt != null && Instant.now().isAfter(expiresAt)) return false;
+        if (rotatesAt != null && Instant.now().isAfter(rotatesAt)) return false;
+
+        return true;
     }
 
 }

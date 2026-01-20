@@ -37,7 +37,6 @@ public class SecurityConfig {
     @Value("${security.basic.enabled:false}")
     private boolean basicEnabled;
 
-
     private final ObjectProvider<ApiKeyTenantFilter> apiKeyTenantFilterProvider;
     private final JwtAuthFilter jwtAuthFilter;
     private final TenantResolutionFilter tenantResolutionFilter;
@@ -80,16 +79,15 @@ public class SecurityConfig {
                     auth.requestMatchers(HttpMethod.POST, "/api/core/bootstrap-admin").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/catalogs/organizations").permitAll();
 
-                    // Ingest por API-KEY (permitAll aquí; ApiKeyTenantFilter lo protege)
+                    // Ingest (permitAll aquí; ApiKeyTenantFilter lo protege)
                     auth.requestMatchers(HttpMethod.POST, "/api/ingest/**").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/logs", "/api/logs/events").permitAll();
 
-                    // Logs: lectura siempre con JWT
+                    // Logs lectura siempre con JWT
                     auth.requestMatchers(HttpMethod.GET, "/api/logs/**")
                             .hasAuthority("PERM_LOG_READ");
 
-                    // Endpoint Export ------
                     auth.requestMatchers(HttpMethod.GET, "/api/logs/export/**")
                             .hasAuthority("PERM_LOG_EXPORT");
 
@@ -113,23 +111,21 @@ public class SecurityConfig {
 
                     auth.anyRequest().authenticated();
                 })
-                .exceptionHandling(ex -> ex
-                        .authenticationEntryPoint(jsonAuthEntryPoint)
-                );
+                .exceptionHandling(ex -> ex.authenticationEntryPoint(jsonAuthEntryPoint));
 
-        // ====== ORDEN DE FILTROS ======
+        // ====== ORDEN DE FILTROS (anclados a un filtro CONOCIDO) ======
 
-        // 1) Resolver tenant (JWT -> claim tenantId; fallback X-Tenant)
-        http.addFilterBefore(tenantResolutionFilter, UsernamePasswordAuthenticationFilter.class);
-
-        // 2) JWT después del resolver, para que ya exista TenantContext al autenticar
-        http.addFilterAfter(jwtAuthFilter, TenantResolutionFilter.class);
-
-        // 3) API Key / validador de tenant (después del resolver)
+        // ApiKey para ingest (solo si requireApiKey=true y existe bean)
         var apiKeyFilter = apiKeyTenantFilterProvider.getIfAvailable();
         if (requireApiKey && apiKeyFilter != null) {
-            http.addFilterAfter(apiKeyFilter, TenantResolutionFilter.class);
+            http.addFilterBefore(apiKeyFilter, UsernamePasswordAuthenticationFilter.class);
         }
+
+        // Resolver tenant desde headers (X-Tenant / X-Organization-Id etc)
+        http.addFilterBefore(tenantResolutionFilter, UsernamePasswordAuthenticationFilter.class);
+
+        // JWT para UI/lecturas
+        http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         if (basicEnabled) {
             http.httpBasic(Customizer.withDefaults());
@@ -144,7 +140,6 @@ public class SecurityConfig {
         cfg.setAllowedOrigins(List.of("*"));
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 
-        // Permitimos Authorization, X-API-Key y variantes de Tenant
         cfg.setAllowedHeaders(List.of(
                 "Authorization",
                 "Content-Type",

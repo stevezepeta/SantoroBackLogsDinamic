@@ -3,23 +3,22 @@ package backlogs.dinamico.infra.security;
 import backlogs.dinamico.model.ingest.ApiKey;
 import backlogs.dinamico.repository.catalog.ApiKeyRep;
 import backlogs.dinamico.tenant.TenantContext;
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.JwtException;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
-import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -28,226 +27,168 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 
 import static backlogs.dinamico.security.KeyHasher.sha256b64;
 
 @Slf4j
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
-@ConditionalOnProperty(
-        prefix = "multitenant",
-        name = "require-api-key",
-        havingValue = "true",
-        matchIfMissing = false
-)
 @RequiredArgsConstructor
 public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
   private final ApiKeyRep apiKeyRepo;
-  private final JwtTokenService jwtTokenService;
 
-  @Value("${multitenant.strategy:collection-per-tenant}") // single | collection-per-tenant | database-per-tenant
+  @Value("${multitenant.require-api-key:true}")
+  private boolean requireApiKey;
+
+  @Value("${multitenant.strategy:collection-per-tenant}")
   private String strategy;
 
   @Value("${multitenant.base-database:logs_system}")
   private String baseDb;
 
-  @Value("${multitenant.header.tenant:X-Tenant}")
-  private String tenantHeaderName;
-
   @Value("${backlogs.allow-public-create-organization:true}")
   private boolean allowPublicCreateOrg;
 
-  // Rutas que NO deben pasar por este filtro
-  private static final List<RequestMatcher> EXCLUDED = List.of(
-          new AntPathRequestMatcher("/error"),
-          new AntPathRequestMatcher("/actuator/**"),
-          new AntPathRequestMatcher("/api/auth/**"),
-          new AntPathRequestMatcher("/ws/**")
-  );
-
-  // Bypass explícito para crear organizations SIN API-KEY
-  private static final RequestMatcher CREATE_ORG_POST =
-          new AntPathRequestMatcher("/api/catalogs/organizations", "POST");
-
-  // Ingest endpoints (API-KEY o JWT)
-  private static final RequestMatcher INGEST_POST =
-          new AntPathRequestMatcher("/api/ingest/**", "POST");
-
-  private static final RequestMatcher FINGERPRINT_POST =
-          new AntPathRequestMatcher("/api/fingerprint/**", "POST");
-
-  // endpoint universal de ingesta
-  private static final RequestMatcher LOG_EVENTS_POST =
-          new AntPathRequestMatcher("/api/logs/events", "POST");
-
-  private static final RequestMatcher LOGS_POST =
-          new AntPathRequestMatcher("/api/logs", "POST");
-
   @PostConstruct
   void onInit() {
-    log.warn("[ApiKeyTenantFilter] Registrado y ACTIVO (multitenant.require-api-key=true).");
+    log.warn("[ApiKeyTenantFilter] Registrado. requireApiKey={}, strategy={}", requireApiKey, strategy);
+  }
+
+  // ✅ detección robusta (sin depender de /**)
+  private static boolean isIngest(HttpServletRequest req) {
+    if (!HttpMethod.POST.matches(req.getMethod())) return false;
+
+    String uri = req.getRequestURI();
+    return uri.startsWith("/api/logs/events")
+            || uri.equals("/api/logs") || uri.startsWith("/api/logs/")     // si algún día tienes /api/logs/bulk
+            || uri.startsWith("/api/ingest/")
+            || uri.startsWith("/api/fingerprint/");
+  }
+
+  private static boolean isExcluded(HttpServletRequest req) {
+    String uri = req.getRequestURI();
+    return uri.startsWith("/error")
+            || uri.startsWith("/actuator/")
+            || uri.startsWith("/api/auth/")
+            || uri.startsWith("/ws/");
   }
 
   @Override
-  protected boolean shouldNotFilter(HttpServletRequest request) {
-    String path = request.getRequestURI();
+  protected boolean shouldNotFilter(HttpServletRequest req) {
+    if (HttpMethod.OPTIONS.matches(req.getMethod())) return true;
 
-    if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
+    // No estorbar en rutas públicas
+    if (isExcluded(req)) return true;
 
-    for (RequestMatcher m : EXCLUDED) {
-      if (m.matches(request)) {
-        log.debug("[ApiKeyTenantFilter] skipping path={} (EXCLUDED)", path);
-        return true;
-      }
-    }
-
-    if (allowPublicCreateOrg && CREATE_ORG_POST.matches(request)) {
-      log.debug("[ApiKeyTenantFilter] skipping path={} (CREATE_ORG_POST)", path);
+    // permitir crear org sin api-key
+    if (allowPublicCreateOrg
+            && HttpMethod.POST.matches(req.getMethod())
+            && "/api/catalogs/organizations".equals(req.getRequestURI())) {
       return true;
     }
 
-    return false;
+    // ✅ SOLO aplicar a ingesta
+    return !isIngest(req);
   }
 
   @Override
-  protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
-          throws ServletException, IOException {
+  protected void doFilterInternal(HttpServletRequest req,
+                                  HttpServletResponse res,
+                                  FilterChain chain) throws ServletException, IOException {
 
     final String path = req.getRequestURI();
-    final String bearerToken = resolveBearerToken(req);
 
-    log.info("[ApiKeyTenantFilter] path={}, tenantCtx={}, bearer={}, xTenant={}",
-            path,
-            TenantContext.getTenantIdHex(),
-            (bearerToken != null) ? "yes" : "no",
-            req.getHeader(tenantHeaderName)
-    );
+    // 🔥 ESTE LOG debe salir SÍ o SÍ cuando pegues a /api/logs/events
+    log.info("[ApiKeyTenantFilter] ENTER path={}, method={}, requireApiKey={}",
+            path, req.getMethod(), requireApiKey);
 
-    // 0) Si ya viene tenant resuelto (por otro filtro), solo aplica strategy y sigue
-    if (TenantContext.getTenantId() != null) {
-      applyStrategy(TenantContext.getTenantId());
+    if (!requireApiKey) {
       chain.doFilter(req, res);
       return;
     }
 
-    // 1) Si viene Bearer: resolver tenant desde JWT (NO pedir X-Api-Key)
-    if (bearerToken != null) {
-      ObjectId tenantId = tryResolveTenantFromJwt(bearerToken);
-      if (tenantId == null) {
-        unauthorized(res, "tenant_not_resolved");
-        return;
-      }
+    // Lee header api key (case variants)
+    String apiKeyPlain = firstNonBlank(req.getHeader("X-Api-Key"), req.getHeader("X-API-Key"), req.getHeader("x-api-key"));
 
-      boolean weSet = false;
-      try {
-        TenantContext.set(TenantContext.Ctx.builder()
-                .tenantId(tenantId)
-                .build());
-        weSet = true;
+    log.info("[ApiKeyTenantFilter] ingest={}, xApiKeyPresent={}",
+            true, StringUtils.hasText(apiKeyPlain));
 
-        applyStrategy(tenantId);
-        chain.doFilter(req, res);
-      } finally {
-        if (weSet) TenantContext.clear();
-      }
+    if (!StringUtils.hasText(apiKeyPlain)) {
+      unauthorized(res, "missing_x_api_key");
       return;
     }
 
-    // 2) Si es endpoint de ingesta -> exigir API KEY (solo si NO hay Bearer)
-    boolean isIngest =
-            INGEST_POST.matches(req)
-                    || FINGERPRINT_POST.matches(req)
-                    || LOGS_POST.matches(req)
-                    || LOG_EVENTS_POST.matches(req);
-
-    if (isIngest) {
-      String apiKeyPlain = firstNonBlank(req.getHeader("X-Api-Key"), req.getHeader("X-API-Key"));
-      if (!StringUtils.hasText(apiKeyPlain)) {
-        unauthorized(res, "Missing X-Api-Key");
-        return;
-      }
-
-      String hash = sha256b64(apiKeyPlain);
-      var opt = apiKeyRepo.findByKeyHashAndStatus(hash, "active");
-      if (opt.isEmpty()) {
-        unauthorized(res, "Invalid API key");
-        return;
-      }
-
-      ApiKey key = opt.get();
-
-      // expiración / rotación
-      var now = Instant.now();
-      if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
-        unauthorized(res, "API key expired");
-        return;
-      }
-      if (key.getRotatesAt() != null && now.isAfter(key.getRotatesAt())) {
-        unauthorized(res, "API key requires rotation");
-        return;
-      }
-
-      boolean weSet = false;
-      try {
-        TenantContext.set(TenantContext.Ctx.builder()
-                .tenantId(key.getTenantId())
-                .systemId(key.getSystemId())
-                .environmentId(key.getEnvironmentId())
-                .build());
-        weSet = true;
-
-        applyStrategy(key.getTenantId());
-        chain.doFilter(req, res);
-      } finally {
-        if (weSet) TenantContext.clear();
-      }
+    // Buscar hash activo
+    String hash = sha256b64(apiKeyPlain);
+    var opt = apiKeyRepo.findByKeyHashAndStatus(hash, "active");
+    if (opt.isEmpty()) {
+      unauthorized(res, "invalid_api_key");
       return;
     }
 
-    // 3) No es ingesta, no hay Bearer, no hay tenant header: deja pasar (Security decide)
-    chain.doFilter(req, res);
-  }
+    ApiKey key = opt.get();
+    Instant now = Instant.now();
 
-  // ---------- JWT tenant resolver (usa tu JwtTokenService actual) ----------
-  private ObjectId tryResolveTenantFromJwt(String token) {
+    // expiración / rotación
+    if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
+      unauthorized(res, "api_key_expired");
+      return;
+    }
+    if (key.getRotatesAt() != null && now.isAfter(key.getRotatesAt())) {
+      unauthorized(res, "api_key_requires_rotation");
+      return;
+    }
+
+    // scope LOGS_INGEST requerido
+    if (key.getScopes() != null && !key.getScopes().isEmpty()) {
+      boolean okScope = key.getScopes().stream()
+              .filter(StringUtils::hasText)
+              .map(s -> s.trim().toUpperCase(Locale.ROOT))
+              .anyMatch(s -> s.equals("LOGS_INGEST") || s.equals("INGEST") || s.equals("ALL"));
+
+      if (!okScope) {
+        unauthorized(res, "missing_scope_logs_ingest");
+        return;
+      }
+    }
+
+    // lastUsedAt best effort
     try {
-      Claims claims = jwtTokenService.verifyAccess(token);
+      key.setLastUsedAt(now);
+      apiKeyRepo.save(key);
+    } catch (Exception ignore) {}
 
-      Object raw =
-              claims.get("tenantId") != null ? claims.get("tenantId") :
-                      claims.get("tenant_id") != null ? claims.get("tenant_id") :
-                              claims.get("orgId") != null ? claims.get("orgId") :
-                                      claims.get("organizationId");
+    // ✅ 1) TenantContext para multitenancy
+    TenantContext.setForIngest(key.getTenantId(), key.getSystemId(), key.getEnvironmentId());
+    applyStrategy(key.getTenantId());
 
-      if (raw == null) return null;
+    // ✅ 2) Authentication para que NO sea anonymous en tu controller
+    var principal = new ApiKeyPrincipal(
+            key.getId(),
+            key.getTenantId(),
+            key.getSystemId(),
+            key.getEnvironmentId(),
+            key.getScopes()
+    );
 
-      String hex = String.valueOf(raw);
-      if (!ObjectId.isValid(hex)) return null;
+    var auth = new UsernamePasswordAuthenticationToken(
+            principal,
+            null,
+            List.of(
+                    new SimpleGrantedAuthority("ROLE_API_KEY"),
+                    new SimpleGrantedAuthority("PERM_LOG_INGEST")
+            )
+    );
+    SecurityContextHolder.getContext().setAuthentication(auth);
 
-      return new ObjectId(hex);
-
-    } catch (JwtException e) {
-      log.warn("[ApiKeyTenantFilter] JWT inválido: {}", e.getMessage());
-      return null;
-    } catch (Exception e) {
-      log.warn("[ApiKeyTenantFilter] Error leyendo JWT: {}", e.getMessage());
-      return null;
+    try {
+      chain.doFilter(req, res);
+    } finally {
+      SecurityContextHolder.clearContext();
+      TenantContext.clear();
     }
-  }
-
-  private static String resolveBearerToken(HttpServletRequest req) {
-    String auth = req.getHeader("Authorization");
-    if (auth == null) return null;
-    if (!auth.startsWith("Bearer ")) return null;
-    String token = auth.substring("Bearer ".length()).trim();
-    return token.isEmpty() ? null : token;
-  }
-
-  private static String firstNonBlank(String a, String b) {
-    if (a != null && !a.isBlank()) return a;
-    if (b != null && !b.isBlank()) return b;
-    return null;
   }
 
   private void applyStrategy(ObjectId tenantId) {
@@ -259,16 +200,41 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       case "collection-per-tenant" ->
               TenantContext.setCollectionSuffix("__" + tenantId.toHexString());
       default -> {
-        // single: sin cambios
+        // single
       }
     }
+  }
+
+  private static String firstNonBlank(String... xs) {
+    if (xs == null) return null;
+    for (String x : xs) {
+      if (x != null && !x.isBlank()) return x.trim();
+    }
+    return null;
   }
 
   private void unauthorized(HttpServletResponse res, String msg) throws IOException {
     res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
     res.setCharacterEncoding(StandardCharsets.UTF_8.name());
     res.setContentType("application/json");
-    res.getWriter().write("{\"ok\":false,\"error\":\"unauthorized\",\"message\":\"" + msg + "\"}");
+    res.getWriter().write("{\"ok\":false,\"code\":\"unauthorized\",\"message\":\"" + msg + "\"}");
     res.getWriter().flush();
+  }
+
+  @Getter
+  public static class ApiKeyPrincipal {
+    private final ObjectId apiKeyId;
+    private final ObjectId tenantId;
+    private final ObjectId systemId;
+    private final ObjectId environmentId;
+    private final List<String> scopes;
+
+    public ApiKeyPrincipal(ObjectId apiKeyId, ObjectId tenantId, ObjectId systemId, ObjectId environmentId, List<String> scopes) {
+      this.apiKeyId = apiKeyId;
+      this.tenantId = tenantId;
+      this.systemId = systemId;
+      this.environmentId = environmentId;
+      this.scopes = scopes;
+    }
   }
 }

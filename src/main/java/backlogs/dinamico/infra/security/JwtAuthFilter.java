@@ -10,10 +10,13 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
+import org.springframework.security.web.util.matcher.RequestMatcher;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -38,6 +41,28 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtTokenService tokens;
 
+    // IMPORTANT: ingesta NO debe autenticarse por JWT (solo API KEY)
+    private static final RequestMatcher LOG_EVENTS_POST =
+            new AntPathRequestMatcher("/api/logs/events/**", "POST");
+    private static final RequestMatcher LOGS_POST =
+            new AntPathRequestMatcher("/api/logs/**", "POST");
+    private static final RequestMatcher INGEST_POST =
+            new AntPathRequestMatcher("/api/ingest/**", "POST");
+    private static final RequestMatcher FINGERPRINT_POST =
+            new AntPathRequestMatcher("/api/fingerprint/**", "POST");
+
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        // OPTIONS bypass
+        if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
+
+        // Ingesta: NO procesar JWT aquí (ApiKeyTenantFilter se encarga)
+        return LOG_EVENTS_POST.matches(request)
+                || LOGS_POST.matches(request)
+                || INGEST_POST.matches(request)
+                || FINGERPRINT_POST.matches(request);
+    }
+
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
@@ -52,7 +77,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         }
 
         try {
-            String token = header.substring(7);
+            String token = header.substring(7).trim();
+            if (!StringUtils.hasText(token)) {
+                chain.doFilter(request, response);
+                return;
+            }
 
             // SOLO ACCESS
             Claims c = tokens.verifyAccess(token);
@@ -71,8 +100,8 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             );
 
             String orgHex = firstNonBlank(
-                    c.get("organizationId", String.class),
                     c.get("orgId", String.class),
+                    c.get("organizationId", String.class),
                     c.get("organization_id", String.class),
                     c.get("org", String.class)
             );
@@ -81,7 +110,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             ObjectId orgId    = toObjectId(orgHex);
             ObjectId userId   = toObjectId(uidHex);
 
-            // Merge con TenantContext previo
+            // Merge con TenantContext previo (por headers/ApiKey)
             var prev = TenantContext.get();
             if (tenantId == null) tenantId = prev.getTenantId();
             if (orgId == null) orgId = prev.getOrganizationId();
@@ -100,7 +129,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .toList();
 
             // ---------------- Permisos ----------------
-            // soporta claim "perms" o "permissions"
             @SuppressWarnings("unchecked")
             List<Object> permsRaw = firstNonNullList(
                     c.get(CLAIM_PERMS_PRIMARY, List.class),
@@ -108,7 +136,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             );
 
             List<String> permCodes = normalizeList(permsRaw)
-                    // si ya viniera con PERM_ lo normalizamos a puro código
                     .map(s -> s.startsWith("PERM_") ? s.substring("PERM_".length()) : s)
                     .map(s -> s.toUpperCase(Locale.ROOT))
                     .distinct()
@@ -126,9 +153,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .distinct()
                     .toList();
 
-            if (isOrgWide) allowedSystems = List.of(); // orgWide => no aplica systems
+            if (isOrgWide) allowedSystems = List.of();
 
             // ---------------- TenantContext ----------------
+            // Nota: TenantResolutionFilter limpiará el ThreadLocal al final del request.
             TenantContext.set(TenantContext.Ctx.builder()
                     .tenantId(tenantId)
                     .organizationId(orgId)
