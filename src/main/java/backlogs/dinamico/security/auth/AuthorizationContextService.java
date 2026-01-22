@@ -12,6 +12,11 @@ import org.bson.types.ObjectId;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+
+
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,6 +28,8 @@ public class AuthorizationContextService {
     private final UserRoleRepository userRoleRepository;
     private final RoleRepository roleRepository;
 
+    private final MongoTemplate mongoTemplate;
+
     public AuthorizationContext build(ObjectId tenantId, ObjectId userId) {
 
         List<UserRole> links = userRoleRepository.findByTenantIdAndUserId(tenantId, userId);
@@ -30,6 +37,9 @@ public class AuthorizationContextService {
         if (links == null || links.isEmpty()) {
             return AuthorizationContext.builder()
                     .orgWide(false)
+                    .allowedSystems(Set.of())
+                    .roles(Set.of())
+                    .permissions(Set.of())
                     .build();
         }
 
@@ -41,6 +51,9 @@ public class AuthorizationContextService {
         if (roleIds.isEmpty()) {
             return AuthorizationContext.builder()
                     .orgWide(false)
+                    .allowedSystems(Set.of())
+                    .roles(Set.of())
+                    .permissions(Set.of())
                     .build();
         }
 
@@ -83,9 +96,23 @@ public class AuthorizationContextService {
             }
         }
 
+        // CAMBIO: si orgWide, devolvemos TODOS los systems del tenant
         if (orgWide) {
             allowedSystems.clear();
+
+            Query q = new Query();
+            q.addCriteria(Criteria.where("tenant_id").is(tenantId));
+            // opcional: si quieres solo systems con logs activos/no borrados, etc.
+
+            List<String> systems = mongoTemplate.findDistinct(q, "system", "log_events", String.class);
+
+            systems.stream()
+                    .filter(StringUtils::hasText)
+                    .map(String::trim)
+                    .map(String::toUpperCase)
+                    .forEach(allowedSystems::add);
         }
+
 
         return AuthorizationContext.builder()
                 .roles(roleCodes)

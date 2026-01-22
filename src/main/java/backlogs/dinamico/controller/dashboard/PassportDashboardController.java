@@ -227,6 +227,9 @@ public class PassportDashboardController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
 
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
+
             Authentication auth
     ) {
         Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
@@ -240,7 +243,9 @@ public class PassportDashboardController {
                 normalize(personId),
                 normalize(requestId),
                 from,
-                to
+                to,
+                page,
+                size
         );
 
         return ApiResponse.ok("Timeline", "passports_timeline", data);

@@ -1,10 +1,17 @@
 package backlogs.dinamico.service.catalog;
 
+import backlogs.dinamico.api.dto.catalog.ApiKeyView;
 import backlogs.dinamico.model.ingest.ApiKey;
 import backlogs.dinamico.repository.catalog.ApiKeyRep;
 import backlogs.dinamico.tenant.TenantContext;
+import lombok.AllArgsConstructor;
+import lombok.NoArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,9 +61,13 @@ public class ApiKeyService {
 
         Instant now = Instant.now();
 
-        Instant expiresAt = null;
-        if (ttlDays != null && rotateDays != null && rotateDays > ttlDays) {
+        if (ttlDays != null && ttlDays > 0 && rotateDays != null && rotateDays > ttlDays) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "rotateDays_cannot_be_greater_than_ttlDays");
+        }
+
+        Instant expiresAt = null;
+        if (ttlDays != null && ttlDays > 0) {
+            expiresAt = now.plus(ttlDays, ChronoUnit.DAYS);
         }
 
         Instant rotatesAt = null;
@@ -81,10 +92,70 @@ public class ApiKeyService {
         return new CreatedKey(saved, plain);
     }
 
-    public List<ApiKey> listMine() {
+    @Transactional
+    public ApiKey renew(ObjectId id, Long ttlDays, Long rotateDays) {
+
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
-        return repo.findByTenantIdOrderByCreatedAtDesc(tenantId);
+
+        ApiKey key = repo.findByTenantIdAndId(tenantId, id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "api_key_not_resolved"));
+
+        // Si quieres bloquear renovaciones cuando ya fue "rotated" (o revocada) puedes hacerlo:
+         if ("rotated".equalsIgnoreCase(key.getStatus())) {
+             throw new ResponseStatusException(HttpStatus.CONFLICT, "api_key_rotated_cannot_be_renewed");
+         }
+
+        Instant now = Instant.now();
+
+        // Defaults (si no mandan nada en el body)
+        long ttl = (ttlDays != null && ttlDays > 0) ? ttlDays : 90L;
+        Long rot = (rotateDays != null && rotateDays > 0) ? rotateDays : null;
+
+        if (rot != null && rot > ttl) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "rotateDays_cannot_be_greater_than_ttlDays");
+        }
+
+        key.setStatus("active");
+        key.setExpiresAt(now.plus(ttl, ChronoUnit.DAYS));
+
+        if (rot != null) {
+            key.setRotatesAt(now.plus(rot, ChronoUnit.DAYS));
+        } else {
+            key.setRotatesAt(null);
+        }
+
+        return repo.save(key);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<ApiKeyView> listMine(String status, String q, int page, int size) {
+
+        ObjectId tenantId = TenantContext.getTenantId();
+        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+
+        if (page < 0) page = 0;
+        if (size < 1) size = 10;
+        if (size > 200) size = 200;
+
+        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<ApiKey> keys;
+
+        boolean hasStatus = StringUtils.hasText(status);
+        boolean hasQ = StringUtils.hasText(q);
+
+        if (hasStatus && hasQ) {
+            keys = repo.findByTenantIdAndStatusAndNameContainingIgnoreCase(tenantId, status.trim(), q.trim(), pageable);
+        } else if (hasStatus) {
+            keys = repo.findByTenantIdAndStatus(tenantId, status.trim(), pageable);
+        } else if (hasQ) {
+            keys = repo.findByTenantIdAndNameContainingIgnoreCase(tenantId, q.trim(), pageable);
+        } else {
+            keys = repo.findByTenantId(tenantId, pageable);
+        }
+
+        return keys.map(this::toView);
     }
 
     @Transactional
@@ -139,6 +210,22 @@ public class ApiKeyService {
         byte[] b = new byte[32];
         new SecureRandom().nextBytes(b);
         return "bk_" + Base64.getUrlEncoder().withoutPadding().encodeToString(b);
+    }
+
+    private ApiKeyView toView(ApiKey k) {
+        return new ApiKeyView(
+                k.getId() != null ? k.getId().toHexString() : null,
+                k.getName(),
+                k.getStatus(),
+                k.getScopes(),
+                k.getSystemId() != null ? k.getSystemId().toHexString() : null,
+                k.getEnvironmentId() != null ? k.getEnvironmentId().toHexString() : null,
+                k.getCreatedAt(),
+                k.getUpdatedAt(),
+                k.getLastUsedAt(),
+                k.getExpiresAt(),
+                k.getRotatesAt()
+        );
     }
 
 }

@@ -1,8 +1,10 @@
 package backlogs.dinamico.infra.security;
 
+import backlogs.dinamico.api.ApiResponse;
 import backlogs.dinamico.model.ingest.ApiKey;
 import backlogs.dinamico.repository.catalog.ApiKeyRep;
 import backlogs.dinamico.tenant.TenantContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -38,6 +40,7 @@ import static backlogs.dinamico.security.KeyHasher.sha256b64;
 public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
   private final ApiKeyRep apiKeyRepo;
+  private final ObjectMapper objectMapper;
 
   @Value("${multitenant.require-api-key:true}")
   private boolean requireApiKey;
@@ -56,7 +59,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     log.warn("[ApiKeyTenantFilter] Registrado. requireApiKey={}, strategy={}", requireApiKey, strategy);
   }
 
-  // ✅ detección robusta (sin depender de /**)
+  // detección robusta (sin depender de /**)
   private static boolean isIngest(HttpServletRequest req) {
     if (!HttpMethod.POST.matches(req.getMethod())) return false;
 
@@ -89,7 +92,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       return true;
     }
 
-    // ✅ SOLO aplicar a ingesta
+    // SOLO aplicar a ingesta
     return !isIngest(req);
   }
 
@@ -100,7 +103,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
 
     final String path = req.getRequestURI();
 
-    // 🔥 ESTE LOG debe salir SÍ o SÍ cuando pegues a /api/logs/events
+    // ESTE LOG debe salir SÍ o SÍ cuando pegues a /api/logs/events
     log.info("[ApiKeyTenantFilter] ENTER path={}, method={}, requireApiKey={}",
             path, req.getMethod(), requireApiKey);
 
@@ -112,19 +115,19 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     // Lee header api key (case variants)
     String apiKeyPlain = firstNonBlank(req.getHeader("X-Api-Key"), req.getHeader("X-API-Key"), req.getHeader("x-api-key"));
 
-    log.info("[ApiKeyTenantFilter] ingest={}, xApiKeyPresent={}",
-            true, StringUtils.hasText(apiKeyPlain));
+    boolean ingest = isIngest(req);
+    log.info("[ApiKeyTenantFilter] ingest={}, xApiKeyPresent={}", ingest, StringUtils.hasText(apiKeyPlain));
 
     if (!StringUtils.hasText(apiKeyPlain)) {
-      unauthorized(res, "missing_x_api_key");
+      unauthorized(res, "missing_x_api_key", "Falta header X-Api-Key");
       return;
     }
 
     // Buscar hash activo
     String hash = sha256b64(apiKeyPlain);
-    var opt = apiKeyRepo.findByKeyHashAndStatus(hash, "active");
+    var opt = apiKeyRepo.findActiveByHash(hash);
     if (opt.isEmpty()) {
-      unauthorized(res, "invalid_api_key");
+      unauthorized(res, "invalid_api_key", "API Key inválida");
       return;
     }
 
@@ -132,12 +135,24 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     Instant now = Instant.now();
 
     // expiración / rotación
-    if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
-      unauthorized(res, "api_key_expired");
-      return;
-    }
-    if (key.getRotatesAt() != null && now.isAfter(key.getRotatesAt())) {
-      unauthorized(res, "api_key_requires_rotation");
+    if (!key.isActiveNow()) {
+      if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
+        var data = java.util.Map.of(
+                "rotatesAt", key.getRotatesAt(),
+                "expiresAt", key.getExpiresAt()
+        );
+
+        unauthorized(res, "api_key_expired", "API Key expirada", data);
+      } else if (key.getRotatesAt() != null && now.isAfter(key.getRotatesAt())) {
+        var data = java.util.Map.of(
+                "rotatesAt", key.getRotatesAt(),
+                "expiresAt", key.getExpiresAt()
+        );
+
+        unauthorized(res, "api_key_requires_rotation", "API Key requiere renovación", data);
+      } else {
+        unauthorized(res, "api_key_inactive", "API Key invalida");
+      }
       return;
     }
 
@@ -149,7 +164,7 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
               .anyMatch(s -> s.equals("LOGS_INGEST") || s.equals("INGEST") || s.equals("ALL"));
 
       if (!okScope) {
-        unauthorized(res, "missing_scope_logs_ingest");
+        unauthorized(res, "missing_scope_logs_ingest", "Falta el campo Ingest");
         return;
       }
     }
@@ -160,11 +175,11 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
       apiKeyRepo.save(key);
     } catch (Exception ignore) {}
 
-    // ✅ 1) TenantContext para multitenancy
+    // TenantContext para multitenancy
     TenantContext.setForIngest(key.getTenantId(), key.getSystemId(), key.getEnvironmentId());
     applyStrategy(key.getTenantId());
 
-    // ✅ 2) Authentication para que NO sea anonymous en tu controller
+    // Authentication para que NO sea anonymous en tu controller
     var principal = new ApiKeyPrincipal(
             key.getId(),
             key.getTenantId(),
@@ -213,13 +228,21 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     return null;
   }
 
-  private void unauthorized(HttpServletResponse res, String msg) throws IOException {
+  private void unauthorized(HttpServletResponse res, String code, String message) throws IOException {
+    unauthorized(res, code, message, null);
+  }
+
+  private void unauthorized(HttpServletResponse res, String code, String message, Object data) throws IOException {
     res.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
     res.setCharacterEncoding(StandardCharsets.UTF_8.name());
     res.setContentType("application/json");
-    res.getWriter().write("{\"ok\":false,\"code\":\"unauthorized\",\"message\":\"" + msg + "\"}");
+
+    var body = ApiResponse.error(code, message, null, data);
+    res.getWriter().write(objectMapper.writeValueAsString(body));
     res.getWriter().flush();
   }
+
+
 
   @Getter
   public static class ApiKeyPrincipal {

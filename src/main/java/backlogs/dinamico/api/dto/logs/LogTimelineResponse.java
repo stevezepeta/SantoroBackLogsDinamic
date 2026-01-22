@@ -5,13 +5,11 @@ import java.util.List;
 
 public record LogTimelineResponse(
         Header header,
-        List<Item> items
+        List<Item> items,
+        PageMeta page
 ) {
 
-    public record Header(
-            String system,
-            String caseId
-    ) {}
+    public record Header(String system, String caseId) {}
 
     public record Item(
             String id,
@@ -22,19 +20,26 @@ public record LogTimelineResponse(
             String severity,
             String message,
 
-            // location
+            // actor
             String actorId,
             String actorUsername,
             String actorFullName,
+
+            // location
             String locationId,
             String locationName,
 
             // correlation
             String requestId,
 
-            // Geo
+            // geo
             List<Double> geoCoordinates,
             Integer geoAccuracyMeters
     ) {}
 
+    public record PageMeta(int page, int size, boolean hasNext) {}
+
+    public static LogTimelineResponse withMeta(Header header, List<Item> items, int page, int size, boolean hasNext) {
+        return new LogTimelineResponse(header, items, new PageMeta(page, size, hasNext));
+    }
 }

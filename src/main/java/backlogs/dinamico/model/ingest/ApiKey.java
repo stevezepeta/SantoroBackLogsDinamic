@@ -31,6 +31,11 @@ import java.util.List;
         @CompoundIndex(
                 name = "ix_api_key_tenant_status",
                 def = "{ 'tenant_id': 1, 'status': 1 }"
+        ),
+        @CompoundIndex(
+                name = "ux_api_key_tenant_name",
+                def = "{ 'tenant_id': 1, 'name': 1 }",
+                unique = true
         )
 })
 public class ApiKey extends BaseEntity {
@@ -52,8 +57,6 @@ public class ApiKey extends BaseEntity {
     private List<String> scopes;
 
     private String status;
-
-    private Instant createdAt;
 
     @Field("last_used_at")
     private Instant lastUsedAt;

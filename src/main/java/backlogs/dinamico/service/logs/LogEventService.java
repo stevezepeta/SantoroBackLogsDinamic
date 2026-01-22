@@ -97,19 +97,17 @@ public class LogEventService {
     // ---------- INGEST (SOLO API KEY) ----------
     public LogEvent ingest(LogEventIngestReq req) {
 
-        // 0) Body obligatorio
+        // Body obligatorio
         if (req == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body_required");
         }
 
-        // 1) Tenant obligatorio (lo setea ApiKeyTenantFilter)
+        // Tenant obligatorio (lo setea ApiKeyTenantFilter)
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
         }
 
-        // 2) Ingest SOLO por API KEY
-        //    - Si llega JWT humano (TenantContext trae userId o authKind=JWT) => forbid
         //    - Si llega header X-Tenant solamente (TenantResolutionFilter) => unauthorized
         if (!TenantContext.isApiKey()) {
             // Diferenciamos mensajes para debug
@@ -118,10 +116,6 @@ public class LogEventService {
             }
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "api_key_required_for_ingest");
         }
-
-        // 3) (Opcional) validar scope de ingesta si tu ScopeGuard lo maneja
-        //    Si NO lo usas, puedes comentar esta línea.
-        // scopeGuard.requireIngestScope(); // <- si existe en tu proyecto
 
         // 4) Validaciones normales
         validateGeo(req.geo());
@@ -313,7 +307,15 @@ public class LogEventService {
     }
 
     // ---------- TIMELINE ----------
-    public LogTimelineResponse timeline(Authentication auth, String system, String caseId, Instant from, Instant to) {
+    public LogTimelineResponse timeline(
+            Authentication auth,
+            String system,
+            String caseId,
+            Instant from,
+            Instant to,
+            int page,
+            int size
+    ) {
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
@@ -326,6 +328,11 @@ public class LogEventService {
         if (!StringUtils.hasText(system) || !StringUtils.hasText(caseId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system and caseId are required");
         }
+
+        if (page < 0) page = 0;
+        if (size < 1) size = 1;
+        int maxSize = 500;
+        if (size > maxSize) size = maxSize;
 
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
@@ -340,9 +347,14 @@ public class LogEventService {
         }
 
         Query q = new Query(new Criteria().andOperator(cs.toArray(new Criteria[0])))
-                .with(Sort.by(Sort.Direction.ASC, "eventTime"));
+                .with(Sort.by(Sort.Direction.ASC, "eventTime"))
+                .skip((long) page * size)
+                .limit(size + 1);
 
-        List<LogEvent> events = mongoTemplate.find(q, LogEvent.class, COLLECTION);
+        List<LogEvent> eventsPlus  = mongoTemplate.find(q, LogEvent.class, COLLECTION);
+
+        boolean hasNext = eventsPlus.size() > size;
+        List<LogEvent> events = hasNext ? eventsPlus.subList(0, size) : eventsPlus;
 
         LogTimelineResponse.Header header = new LogTimelineResponse.Header(system, caseId);
 
@@ -366,7 +378,7 @@ public class LogEventService {
                 ))
                 .toList();
 
-        return new LogTimelineResponse(header, items);
+        return LogTimelineResponse.withMeta(header, items, page, size, hasNext);
     }
 
     // ---------- Helpers ----------

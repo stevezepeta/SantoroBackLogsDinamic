@@ -126,12 +126,15 @@ public class LogEventController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate toDate,
 
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "100") int size,
+
             Authentication auth
     ) {
         Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
 
-        var data = service.timeline(auth, system, caseId, from, to);
+        var data = service.timeline(auth, system, caseId, from, to, page, size);
         return ApiResponse.ok("Timeline", "log_timeline", data);
     }
 

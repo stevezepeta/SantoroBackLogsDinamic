@@ -40,9 +40,14 @@ public record ApiResponse<T>(
         return new ApiResponse<>(true, "deleted", message, path, Instant.now(), null);
     }
 
-    // === ERROR ===
+    // === ERROR (3 args) ===
     public static <T> ApiResponse<T> error(String code, String message, String path) {
         return new ApiResponse<>(false, code, message, path, Instant.now(), null);
+    }
+
+    // === ERROR ===
+    public static <T> ApiResponse<T> error(String code, String message, String path, T data) {
+        return new ApiResponse<>(false, code, message, path, Instant.now(), data);
     }
 
 }

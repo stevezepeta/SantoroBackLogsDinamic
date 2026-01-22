@@ -97,9 +97,9 @@ public class WebAuthController {
                 // útil para UI sin decodificar JWT
                 "authz", Map.of(
                         "roles", ctx.getRoles(),                 // ["ORG_ADMIN", ...]
-                        "permissions", ctx.getPermissions(),     // ["LOG_READ", ...]
-                        "orgWide", ctx.isOrgWide(),              // true/false
-                        "systems", ctx.getAllowedSystems(),      // ["BANK_PA", ...] (vacío si orgWide)
+                        "permissions", ctx.getPermissions(),         // ["LOG_READ", ...]
+                        "orgWide", ctx.isOrgWide(),                  // true/false
+                        "systems", ctx.getAllowedSystems(),          // ["BANK_PA", ...] (vacío si orgWide)
                         "ver", 1
                 ),
 
@@ -159,11 +159,10 @@ public class WebAuthController {
                     )
             );
 
-            // Aquí tienes 2 opciones:
             // A) Mantener EXACTO tu "code" como hoy (para que se vea igual en Postman)
             return ResponseEntity.ok(ApiResponse.success("Token refreshed", data));
 
-            // B) O hacerlo más correcto (code estable + message):
+            // hacerlo más correcto (code estable + message):
             // return ResponseEntity.ok(ApiResponse.success("token_refreshed", "Token refreshed", data));
 
         } catch (JwtException | IllegalArgumentException | IllegalStateException ex) {

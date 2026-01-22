@@ -36,7 +36,9 @@ public class PassportTimelineService {
             String personId,
             String requestId,
             Instant from,
-            Instant to
+            Instant to,
+            int page,
+            int size
     ) {
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
@@ -44,13 +46,16 @@ public class PassportTimelineService {
         String resolvedCaseId = resolveCaseId(system, caseId, passportNumber, personId, requestId, from, to);
         if (!StringUtils.hasText(resolvedCaseId)) {
             // timeline vacío
-            return new LogTimelineResponse(
+            return LogTimelineResponse.withMeta(
                     new LogTimelineResponse.Header(system, null),
-                    List.of()
+                    List.of(),
+                    page,
+                    size,
+                    false
             );
         }
 
-        return logEventService.timeline(auth, system, resolvedCaseId, from, to);
+        return logEventService.timeline(auth, system, resolvedCaseId, from, to, page, size);
     }
 
     private String resolveCaseId(

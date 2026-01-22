@@ -20,7 +20,6 @@ public class ApiKey extends BaseEntity {
 
   private String name;
 
-  @Indexed(name = "ux_api_key", unique = true)
   private String key;          
 
   private String status;       
