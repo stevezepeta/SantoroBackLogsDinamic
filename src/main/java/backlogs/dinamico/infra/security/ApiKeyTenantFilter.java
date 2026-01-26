@@ -30,6 +30,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import static backlogs.dinamico.security.KeyHasher.sha256b64;
 
@@ -134,26 +135,21 @@ public class ApiKeyTenantFilter extends OncePerRequestFilter {
     ApiKey key = opt.get();
     Instant now = Instant.now();
 
-    // expiración / rotación
-    if (!key.isActiveNow()) {
-      if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
-        var data = java.util.Map.of(
-                "rotatesAt", key.getRotatesAt(),
-                "expiresAt", key.getExpiresAt()
-        );
-
-        unauthorized(res, "api_key_expired", "API Key expirada", data);
-      } else if (key.getRotatesAt() != null && now.isAfter(key.getRotatesAt())) {
-        var data = java.util.Map.of(
-                "rotatesAt", key.getRotatesAt(),
-                "expiresAt", key.getExpiresAt()
-        );
-
-        unauthorized(res, "api_key_requires_rotation", "API Key requiere renovación", data);
-      } else {
-        unauthorized(res, "api_key_inactive", "API Key invalida");
-      }
+    // 1) Expirado = bloqueo duro
+    if (key.getExpiresAt() != null && now.isAfter(key.getExpiresAt())) {
+      unauthorized(res, "api_key_expired", "API Key expirada",
+              Map.of("expiresAt", key.getExpiresAt(), "rotatesAt", key.getRotatesAt()));
       return;
+    }
+
+    // 2) Rotación vencida = NO bloquear (solo warning)
+    boolean requiresRotation = key.getRotatesAt() != null && now.isAfter(key.getRotatesAt());
+    if (requiresRotation) {
+      log.warn("[ApiKeyTenantFilter] API key requires renewal/rotation. tenant={}, apiKeyId={}, rotatesAt={}, expiresAt={}",
+              key.getTenantId(), key.getId(), key.getRotatesAt(), key.getExpiresAt());
+
+      // opcional: marcarlo en TenantContext para UI/metricas
+      TenantContext.setRequiresRotation(true);
     }
 
     // scope LOGS_INGEST requerido

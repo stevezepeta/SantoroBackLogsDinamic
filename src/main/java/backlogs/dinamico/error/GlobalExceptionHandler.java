@@ -33,7 +33,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(CONFLICT)
                 .body(ApiResponse.error("conflict", ex.getMessage(), null));
     }
-
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest req) {
         String details = ex.getBindingResult().getFieldErrors().stream()
@@ -42,7 +41,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.badRequest()
                 .body(ApiResponse.error("Validation_error", details, null));
     }
-
     @ExceptionHandler({
             HttpMessageNotReadableException.class,
             MissingServletRequestParameterException.class,

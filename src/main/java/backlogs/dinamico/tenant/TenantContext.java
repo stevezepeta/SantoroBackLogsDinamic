@@ -10,6 +10,9 @@ public final class TenantContext {
 
     private TenantContext() {}
 
+    public static void setRequiresRotation(boolean b) {
+    }
+
     // ================= CONTEXT =================
     @Getter
     @Setter

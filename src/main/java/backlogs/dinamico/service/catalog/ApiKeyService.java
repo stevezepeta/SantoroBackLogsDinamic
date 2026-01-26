@@ -1,5 +1,6 @@
 package backlogs.dinamico.service.catalog;
 
+import backlogs.dinamico.api.dto.catalog.ApiKeyStatusResponse;
 import backlogs.dinamico.api.dto.catalog.ApiKeyView;
 import backlogs.dinamico.model.ingest.ApiKey;
 import backlogs.dinamico.repository.catalog.ApiKeyRep;
@@ -19,6 +20,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.security.SecureRandom;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Base64;
@@ -168,6 +170,81 @@ public class ApiKeyService {
 
         key.setStatus("disabled");
         return repo.save(key);
+    }
+
+    @Transactional(readOnly = true)
+    public ApiKeyStatusResponse status(int page, int size, int renewWindowDays, boolean includeDisabled) {
+
+        ObjectId tenantId = TenantContext.getTenantId();
+        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+
+        if (page < 0) page = 0;
+        if (size < 1) size = 1;
+        if (size > 200) size = 200;
+
+        if (renewWindowDays < 0) renewWindowDays = 0;
+        if (renewWindowDays > 365) renewWindowDays = 365;
+
+        var pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<ApiKey> p;
+        if (includeDisabled) {
+            p = repo.findByTenantId(tenantId, pageable);
+        } else {
+            // si no incluyes disabled, trae solo status=active (o ajusta a tu gusto)
+            p = repo.findByTenantIdAndStatus(tenantId, "active", pageable);
+        }
+
+        Instant now = Instant.now();
+        long renewWindowSeconds = Duration.ofDays(renewWindowDays).getSeconds();
+
+        var items = p.getContent().stream().map(k -> {
+            String st = k.getStatus() != null ? k.getStatus().trim().toLowerCase(Locale.ROOT) : "";
+
+            Instant rotatesAt = k.getRotatesAt();
+            Instant expiresAt = k.getExpiresAt();
+
+            boolean expired = (expiresAt != null && !now.isBefore(expiresAt)); // now >= expiresAt
+            boolean renewRequired = (!expired && rotatesAt != null && !now.isBefore(rotatesAt)); // now >= rotatesAt
+
+            long secondsToRotate = rotatesAt == null ? Long.MAX_VALUE : Duration.between(now, rotatesAt).getSeconds();
+            long secondsToExpire = expiresAt == null ? Long.MAX_VALUE : Duration.between(now, expiresAt).getSeconds();
+
+            ApiKeyStatusResponse.State state;
+
+            if ("disabled".equals(st)) {
+                state = ApiKeyStatusResponse.State.DISABLED;
+            } else if (expired) {
+                state = ApiKeyStatusResponse.State.EXPIRED;
+            } else if (renewRequired) {
+                state = ApiKeyStatusResponse.State.RENEW_REQUIRED;
+            } else {
+                // aún no llega rotatesAt
+                boolean renewSoon = (rotatesAt != null && secondsToRotate <= renewWindowSeconds);
+                state = renewSoon ? ApiKeyStatusResponse.State.RENEW_SOON : ApiKeyStatusResponse.State.OK;
+            }
+
+            return new ApiKeyStatusResponse.Item(
+                    k.getId() != null ? k.getId().toHexString() : null,
+                    k.getName(),
+                    k.getStatus(),
+                    k.getCreatedAt(),
+                    k.getUpdatedAt(),
+                    k.getLastUsedAt(),
+                    k.getRotatesAt(),
+                    k.getExpiresAt(),
+                    state,
+                    renewRequired,
+                    expired,
+                    secondsToRotate,
+                    secondsToExpire
+            );
+        }).toList();
+
+        return new ApiKeyStatusResponse(
+                items,
+                new ApiKeyStatusResponse.PageMeta(page, size, p.getTotalElements(), p.hasNext())
+        );
     }
 
     // Rota desactiva la anterior y crea otra con el mismo "shape"
