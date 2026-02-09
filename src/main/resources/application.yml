@@ -35,3 +35,24 @@ biometric:
   dif-fp: ./data/fp
   dir-face: ./data/face
   threshold: 25
+
+backlogs:
+  rate-limit:
+    enabled: true
+
+    # ------------- BUCKET POR API-KEY ---------------
+    api-key:
+      capacity: 400                             # (burst 2s)
+      refill-tokens: 200                        # (200 logs/seg promedio por Api Key)
+      refill-seconds: 1
+
+    # ------------ BUCKET POR TENANT ----------------
+    tenant:
+      capacity: 4000                          # (burst 2s)
+      refill-tokens: 2000                     # (2000 logs/seg promedio por tenant)
+      refill-seconds: 1
+
+    # ------------ CACHE (EVICTION / TTL) ----------
+    cache:
+      ttl-minutes: 60       # se borra si no se usa en 30 min
+      max-size: 300000      # limite duro de buckets en memoria

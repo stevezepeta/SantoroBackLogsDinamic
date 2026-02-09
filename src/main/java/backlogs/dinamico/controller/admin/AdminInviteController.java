@@ -1,14 +1,13 @@
 package backlogs.dinamico.controller.admin;
 
 import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.api.dto.InviteCreateRequest;
 import backlogs.dinamico.infra.security.AuthUser;
+import backlogs.dinamico.model.core.RoleCode;
 import backlogs.dinamico.model.core.UserInvite;
 import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.service.core.InviteServices;
 import jakarta.validation.Valid;
-import jakarta.validation.constraints.Email;
-import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -28,35 +27,25 @@ public class AdminInviteController {
     private final InviteServices invites;
     private final OrganizationRepository orgRepo;
 
-    public record InviteReq(
-            @NotBlank @Email String email,
-            List<String> roles,
-            List<String> systems,   // NUEVO
-            @Min(1) Long ttlHours
-    ) {}
-
     @PostMapping
     @PreAuthorize("hasAuthority('PERM_USERS_MANAGE') or hasAuthority('PERM_ROLES_ASSIGN')")
     public ApiResponse<Map<String, Object>> createInvite(
             @AuthenticationPrincipal AuthUser me,
-            @Valid @RequestBody InviteReq req
+            @Valid @RequestBody InviteCreateRequest req
     ) {
+        // TTL default 48h si no viene
+        long ttl = (req.getTtlHours() == null || req.getTtlHours() <= 0) ? 48L : req.getTtlHours().longValue();
 
-        long ttl = (req.ttlHours() == null || req.ttlHours() <= 0) ? 48L : req.ttlHours();
-        String email = req.email().trim().toLowerCase(Locale.ROOT);
+        String email = req.getEmail().trim().toLowerCase(Locale.ROOT);
 
-        List<String> roles = (req.roles() == null || req.roles().isEmpty())
-                ? List.of("AGENT")
-                : req.roles().stream()
-                .filter(StringUtils::hasText)
-                .map(r -> r.trim().toUpperCase(Locale.ROOT))
-                .distinct()
-                .toList();
+        RoleCode role = req.getRoles().get(0);
 
-        // systems normalizados (UPPER) y sin duplicados
-        List<String> systems = (req.systems() == null)
+        List<String> roles = List.of(role.name());
+
+        // systems dinámicos: normaliza a UPPER + trim + distinct
+        List<String> systems = (req.getSystems() == null)
                 ? List.of()
-                : req.systems().stream()
+                : req.getSystems().stream()
                 .filter(StringUtils::hasText)
                 .map(s -> s.trim().toUpperCase(Locale.ROOT))
                 .distinct()

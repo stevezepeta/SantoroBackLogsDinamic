@@ -25,4 +25,6 @@ public interface OrganizationRepository extends MongoRepository<Organization, Ob
   Page<Organization> findByNameContainingIgnoreCaseOrDomainContainingIgnoreCaseOrCodeContainingIgnoreCase(
           String name, String domain, String code, Pageable pageable);
 
+  Optional<OrganizationRateLimitView> findProjectedById(ObjectId id);
+
 }

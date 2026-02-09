@@ -21,6 +21,9 @@ import org.springframework.data.mongodb.core.mapping.Field;
 })
 public class Organization extends BaseEntity {
 
+    @Field("rate_limit")
+    private RateLimitPolicy rateLimit;
+
     @Field("name")
     private String name;
 

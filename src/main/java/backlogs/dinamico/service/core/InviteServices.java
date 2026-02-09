@@ -48,6 +48,10 @@ public class InviteServices {
                              List<String> systems,
                              Duration ttl) {
 
+        if (tenantId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenant_required");
+        }
+
         if (!StringUtils.hasText(email)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "email_required");
         }
@@ -59,15 +63,33 @@ public class InviteServices {
                 .ifPresent(u -> { throw new ResponseStatusException(HttpStatus.CONFLICT, "user_exists"); });
 
         invites.findFirstByTenantIdAndEmailCiAndStatus(tenantId, emailCi, "PENDING")
-                .ifPresent(I -> { throw new ResponseStatusException(HttpStatus.CONFLICT, "invite_already_sent"); });
+                .ifPresent(i -> { throw new ResponseStatusException(HttpStatus.CONFLICT, "invite_already_sent"); });
 
-        List<String> safeRoles = (roleCodes == null || roleCodes.isEmpty()) ? List.of("AGENT") : roleCodes;
+        // EXACTAMENTE 1 ROL
+        RoleCode role = parseSingleRole(roleCodes);
+        List<String> safeRoles = List.of(role.name()); // garantizado 1 solo rol
 
-        List<String> safeSystems = (systems == null) ? List.of() : systems.stream()
-                .filter(StringUtils::hasText)
-                .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .distinct()
-                .toList();
+        // SYSTEMS dinámicos: solo normalizamos (NO validamos existencia)
+        List<String> safeSystems = normalizeSystems(systems);
+
+        // SYSTEM_MANAGER requiere >= 1 system
+        if (role == RoleCode.SYSTEM_MANAGER) {
+            if (safeSystems.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "systems_required_for_system_manager");
+            }
+        } else {
+            // Recomendado: para otros roles, ignorar systems
+            safeSystems = List.of();
+        }
+
+        // 4) TTL
+        Duration effectiveTtl = (ttl == null) ? Duration.ofHours(48) : ttl;
+        if (effectiveTtl.isZero() || effectiveTtl.isNegative()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ttl_invalid");
+        }
+        if (effectiveTtl.compareTo(Duration.ofDays(30)) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ttl_too_large");
+        }
 
         String token = randomToken();
         Instant now = Instant.now();
@@ -77,9 +99,9 @@ public class InviteServices {
                 .email(emailNorm)
                 .emailCi(emailCi)
                 .roles(safeRoles)
-                .systems(safeSystems) // NUEVO
+                .systems(safeSystems)
                 .token(token)
-                .expiresAt(now.plus(ttl == null ? Duration.ofHours(24) : ttl))
+                .expiresAt(now.plus(effectiveTtl))
                 .status("PENDING")
                 .createdAt(now)
                 .updateAt(now)
@@ -92,6 +114,50 @@ public class InviteServices {
                 emailCi, tenantId.toHexString(), safeRoles, safeSystems, token, inviteLink);
 
         return saved;
+    }
+
+    private RoleCode parseSingleRole(List<String> roleCodes) {
+        if (roleCodes == null || roleCodes.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_required");
+        }
+
+        // limpia blanks
+        List<String> cleaned = roleCodes.stream()
+                .filter(StringUtils::hasText)
+                .map(r -> r.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .toList();
+
+        if (cleaned.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_required");
+        }
+
+        if (cleaned.size() != 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "only_one_role_allowed");
+        }
+
+        try {
+            return RoleCode.valueOf(cleaned.get(0));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_invalid");
+        }
+    }
+
+    private List<String> normalizeSystems(List<String> systems) {
+        if (systems == null) return List.of();
+
+        return systems.stream()
+                .filter(StringUtils::hasText)
+                .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .map(s -> {
+                    // Validación mínima de “systemCode” (ajústala a tu estándar)
+                    if (!s.matches("^[A-Z0-9][A-Z0-9_\\-]{0,99}$")) {
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system_code_invalid");
+                    }
+                    return s;
+                })
+                .toList();
     }
 
     // Se contruye el link completo
