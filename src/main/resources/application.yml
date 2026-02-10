@@ -56,3 +56,34 @@ backlogs:
     cache:
       ttl-minutes: 60       # se borra si no se usa en 30 min
       max-size: 300000      # limite duro de buckets en memoria
+
+
+springdoc:
+  swagger-ui:
+    # UX
+    doc-expansion: none
+    filter: true
+    try-it-out-enabled: true
+    display-request-duration: true
+    persist-authorization: true
+    operations-sorter: alpha
+    tags-sorter: alpha
+
+    # Ocultar el bloque "Schemas" por defecto (se ve más limpio)
+    default-models-expand-depth: -1
+    default-model-expand-depth: 2
+
+    # Grupos (para que se vean "bonitos" en el dropdown y por orden)
+    urls:
+      - name: 01 - Admin
+        url: /v3/api-docs/01%20-%20Admin
+      - name: 02 - Core
+        url: /v3/api-docs/02%20-%20Core
+      - name: 03 - Public
+        url: /v3/api-docs/03%20-%20Public
+    urls-primary-name: 01 - Admin
+
+server:
+  address: 0.0.0.0
+  port: 8080
+

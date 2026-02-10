@@ -12,6 +12,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -21,6 +22,25 @@ import static org.springframework.http.HttpStatus.CONFLICT;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiResponse<?> handleNoResource(
+            org.springframework.web.servlet.resource.NoResourceFoundException ex,
+            HttpServletRequest req
+    ) {
+        return ApiResponse.error("not_found", "Recurso no encontrado", req.getRequestURI());
+    }
+
+    @ExceptionHandler(org.springframework.web.servlet.NoHandlerFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiResponse<?> handleNoHandler(
+            org.springframework.web.servlet.NoHandlerFoundException ex,
+            HttpServletRequest req
+    ) {
+        return ApiResponse.error("not_found", "Ruta no encontrada", req.getRequestURI());
+    }
+
 
     @ExceptionHandler(NotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotFound(NotFoundException ex, HttpServletRequest req) {

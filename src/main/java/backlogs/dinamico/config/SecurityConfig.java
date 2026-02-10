@@ -58,6 +58,14 @@ public class SecurityConfig {
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> {
 
+                    auth.requestMatchers(
+                            "/swagger-ui/**",
+                            "/v3/api-docs/**",
+                            "/docs-assets/**",
+                            "/swagger-ui.html",
+                            "/webjars/**"   // a veces requerido
+                    ).permitAll();
+
                     auth.requestMatchers("/error", "/actuator/**").permitAll();
                     auth.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
 
@@ -114,8 +122,6 @@ public class SecurityConfig {
                 .exceptionHandling(ex -> ex.authenticationEntryPoint(jsonAuthEntryPoint));
 
         // ====== ORDEN DE FILTROS (anclados a un filtro CONOCIDO) ======
-
-        // ApiKey para ingest (solo si requireApiKey=true y existe bean)
         var apiKeyFilter = apiKeyTenantFilterProvider.getIfAvailable();
         if (requireApiKey && apiKeyFilter != null) {
             http.addFilterBefore(apiKeyFilter, UsernamePasswordAuthenticationFilter.class);

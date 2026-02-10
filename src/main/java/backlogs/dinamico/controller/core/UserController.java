@@ -6,6 +6,11 @@ import backlogs.dinamico.model.core.User;
 import backlogs.dinamico.service.core.UserRoleService;
 import backlogs.dinamico.service.core.UserService;
 import backlogs.dinamico.tenant.TenantContext;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
@@ -24,6 +29,8 @@ import java.util.List;
 import static org.springframework.http.HttpStatus.BAD_REQUEST;
 
 @Slf4j
+@Tag(name = "Core - Users", description = "CRUD de usuarios dentro del tenant (requiere X-Tenant)")
+@SecurityRequirement(name = "bearerAuth")
 @RestController
 @RequestMapping("/api/core/users")
 @RequiredArgsConstructor
@@ -39,6 +46,20 @@ public class UserController {
         return t;
     }
 
+    @Operation(summary = "Listar usuarios", description = "Soporta paginación y filtros simples (q, status).")
+    @io.swagger.v3.oas.annotations.Parameters({
+            @io.swagger.v3.oas.annotations.Parameter(
+                    name = "X-Tenant", in = ParameterIn.HEADER, required = true,
+                    description = "Id del tenant/organización (Mongo ObjectId).",
+                    example = "696a7730dc3d6cd1487cdd3e"
+            )
+    })
+    @io.swagger.v3.oas.annotations.responses.ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OK"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Tenant inválido/ausente"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "No autenticado"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Sin permisos")
+    })
     @GetMapping
     public ApiResponse<PageDto<UserListItem>> list(
             @RequestParam(defaultValue = "0") Integer page,
@@ -73,6 +94,14 @@ public class UserController {
         return ApiResponse.ok("Usuarios listados", null, dto);
     }
 
+    @Operation(summary = "Obtener usuario por id")
+    @io.swagger.v3.oas.annotations.Parameters({
+            @io.swagger.v3.oas.annotations.Parameter(
+                    name = "X-Tenant", in = ParameterIn.HEADER, required = true,
+                    description = "Id del tenant/organización (Mongo ObjectId).",
+                    example = "696a7730dc3d6cd1487cdd3e"
+            )
+    })
     @GetMapping("/{id}")
     public ApiResponse<UserDetail> get(@PathVariable ObjectId id) {
         ObjectId tenantId = requireTenant();
@@ -93,6 +122,14 @@ public class UserController {
         return ApiResponse.ok("Usuario encontrado", null, dto);
     }
 
+    @Operation(summary = "Crear usuario")
+    @io.swagger.v3.oas.annotations.Parameters({
+            @io.swagger.v3.oas.annotations.Parameter(
+                    name = "X-Tenant", in = ParameterIn.HEADER, required = true,
+                    description = "Id del tenant/organización (Mongo ObjectId).",
+                    example = "696a7730dc3d6cd1487cdd3e"
+            )
+    })
     @PostMapping
     public ApiResponse<UserDetail> create(@RequestBody User body) {
         ObjectId tenantId = requireTenant();
@@ -113,6 +150,14 @@ public class UserController {
         return ApiResponse.created("Usuario creado", null, dto);
     }
 
+    @Operation(summary = "Actualizar usuario")
+    @io.swagger.v3.oas.annotations.Parameters({
+            @io.swagger.v3.oas.annotations.Parameter(
+                    name = "X-Tenant", in = ParameterIn.HEADER, required = true,
+                    description = "Id del tenant/organización (Mongo ObjectId).",
+                    example = "696a7730dc3d6cd1487cdd3e"
+            )
+    })
     @PutMapping("/{id}")
     public ApiResponse<UserDetail> update(@PathVariable ObjectId id, @RequestBody User body) {
         ObjectId tenantId = requireTenant();
@@ -133,6 +178,14 @@ public class UserController {
         return ApiResponse.ok("Usuario actualizado", null, dto);
     }
 
+    @Operation(summary = "Eliminar usuario")
+    @io.swagger.v3.oas.annotations.Parameters({
+            @io.swagger.v3.oas.annotations.Parameter(
+                    name = "X-Tenant", in = ParameterIn.HEADER, required = true,
+                    description = "Id del tenant/organización (Mongo ObjectId).",
+                    example = "696a7730dc3d6cd1487cdd3e"
+            )
+    })
     @DeleteMapping("/{id}")
     public ApiResponse<Void> delete(@PathVariable ObjectId id) {
         service.delete(requireTenant(), id);
@@ -141,10 +194,10 @@ public class UserController {
 
     @Value
     public static class UserListItem {
-        String id;
-        String email;
-        String name;
-        String status;
+        @Schema(example = "696a7730dc3d6cd1487cdd3e") String id;
+        @Schema(example = "alan@gmail.com") String email;
+        @Schema(example = "Alan Manuel") String name;
+        @Schema(example = "active") String status;
         Instant createdAt;
         Instant updatedAt;
         List<String> roles;
@@ -152,10 +205,10 @@ public class UserController {
 
     @Value
     public static class UserDetail {
-        String id;
-        String email;
-        String name;
-        String status;
+        @Schema(example = "696a7730dc3d6cd1487cdd3e") String id;
+        @Schema(example = "alan@gmail.com") String email;
+        @Schema(example = "Alan Manuel") String name;
+        @Schema(example = "active") String status;
         Instant createdAt;
         Instant updatedAt;
         List<String> roles;
@@ -163,9 +216,9 @@ public class UserController {
 
     @Value
     public static class PageDto<T> {
-        int page;
-        int size;
-        long total;
+        @Schema(example = "0") int page;
+        @Schema(example = "10") int size;
+        @Schema(example = "1") long total;
         java.util.List<T> data;
 
         public static <T> PageDto<T> of(Page<?> p, List<T> items) {
