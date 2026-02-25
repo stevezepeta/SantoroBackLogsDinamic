@@ -127,8 +127,22 @@ public class LogEventService {
 
         String env    = normalize(req.environment()); // puede ser null
         String caseId = normalize(req.caseId());
-
         Instant eventTime = (req.eventTime() != null) ? req.eventTime() : Instant.now();
+
+        // ----------------- NORMALIZACION CLAVE -------------------
+        String severityRaw = normalizeUpper(req.severity());
+        String severityNorm = LogNormalizationUtils.normalizeSeverity(severityRaw);
+
+        String statusNorm = normalizeUpper(req.status());
+        String outcomeNorm = normalizeUpper(req.outcome());
+
+        // messageKey
+        String msgNorm = normalize(req.message());
+        String reasonDesc = (req.reason() != null) ? normalize(req.reason().description()) : null;
+        String messageKey = LogNormalizationUtils.buildMessageKey(msgNorm, reasonDesc);
+
+        // isError real
+        boolean isError = LogNormalizationUtils.computeIsError(severityNorm, statusNorm, outcomeNorm);
 
         LogEvent event = LogEvent.builder()
                 .tenantId(tenantId)
@@ -138,10 +152,13 @@ public class LogEventService {
                 .caseId(caseId)
                 .eventTime(eventTime)
                 .eventType(normalizeUpper(req.eventType()))
-                .status(normalizeUpper(req.status()))
-                .outcome(normalizeUpper(req.outcome()))
-                .severity(normalizeUpper(req.severity()))
-                .message(normalize(req.message()))
+                .status(statusNorm)
+                .outcome(outcomeNorm)
+                .severity(severityNorm)
+                .severity(severityRaw)
+                .message(msgNorm)
+                .messageKey(messageKey)
+                .isError(isError)
                 .geo(mapGeo(req.geo()))
                 .actor(req.actor() == null ? null :
                         new LogEvent.Actor(
@@ -181,7 +198,13 @@ public class LogEventService {
                                 normalizeUpper(req.reason().code()),
                                 normalize(req.reason().description())
                         ))
-                .tags(req.tags() == null ? List.of() : req.tags())
+                .tags(req.tags() == null ? List.of() :
+                        req.tags().stream()
+                                .filter(StringUtils::hasText)
+                                .map(t -> t.trim().toLowerCase(Locale.ROOT))
+                                .distinct()
+                                .toList()
+                )
                 .payload(req.payload())
                 .meta(req.meta())
                 .build();

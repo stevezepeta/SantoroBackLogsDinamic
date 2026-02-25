@@ -50,7 +50,10 @@ import java.util.Map;
                 def = "{'tenant_id':1,'system':1,'actor.id':1,'eventTime':-1}"),
 
         @CompoundIndex(name = "idx_tenant_system_location_time_v2",
-                def = "{'tenant_id':1,'system':1,'location.id':1,'eventTime':-1}")
+                def = "{'tenant_id':1,'system':1,'location.id':1,'eventTime':-1}"),
+
+        @CompoundIndex(name = "idx_tenant_time_isError_msgKey_v1",
+                def = "{'tenant_id':1,'eventTime':-1,'isError':1,'messageKey':1}")
 })
 public class LogEvent {
 
@@ -80,8 +83,11 @@ public class LogEvent {
   private String status;
   @Field("outcome")
   private String outcome;
+
   @Field("severity")
   private String severity;
+  @Field("severityRaw")
+  private String severityRaw;
 
   @Field("message")
   private String message;
@@ -112,6 +118,12 @@ public class LogEvent {
   private Map<String, Object> payload;
   @Field("meta")
   private Map<String, Object> meta;
+
+
+  @Field("messageKey")
+  private String messageKey;
+  @Field("isError")
+  private Boolean isError;
 
   @Data
   @AllArgsConstructor

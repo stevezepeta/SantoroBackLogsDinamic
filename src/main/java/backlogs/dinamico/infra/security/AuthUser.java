@@ -21,4 +21,9 @@ public class AuthUser {
 
         private final boolean orgWide;
         private final List<String> allowedSystems;
+
+        @Override
+        public String toString() {
+                return email;
+        }
 }
