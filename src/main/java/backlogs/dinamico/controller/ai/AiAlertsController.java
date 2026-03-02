@@ -4,9 +4,11 @@ import backlogs.dinamico.api.ApiResponse;
 import backlogs.dinamico.model.ai.AiAlertRecord;
 import backlogs.dinamico.repository.ai.AiAlertRepository;
 import backlogs.dinamico.service.ai.AiAlertOperatorExplainService;
+import backlogs.dinamico.service.ai.AiTicketDraftService;
 import backlogs.dinamico.service.ai.HourlySummaryService;
 import backlogs.dinamico.service.ai.dto.AlertOperatorExplainDto;
 import backlogs.dinamico.service.ai.dto.SummaryInsightsDto;
+import backlogs.dinamico.service.ai.dto.TicketDraftDto;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -20,6 +22,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.util.StringUtils;
@@ -57,6 +60,7 @@ public class AiAlertsController {
 
     private final AiAlertContextService alertContextService;
     private final AiAlertOperatorExplainService operatorExplainService;
+    private final AiTicketDraftService ticketDraftService;
 
     @GetMapping
     @PreAuthorize("hasAnyAuthority('PERM_LOG_READ', 'ORG_OWNER', 'ORG_ADMIN')")
@@ -223,6 +227,21 @@ public class AiAlertsController {
         );
 
         return ApiResponse.ok("Explicación para operador", "ai_alert_operator_explain", dto);
+    }
+
+    @GetMapping(value = "/{id}/ticket/draft", produces = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("hasAnyAuthority('PERM_LOG_READ', 'ORG_OWNER', 'ORG_ADMIN')")
+    public ApiResponse<TicketDraftDto> ticketDraft(
+            Authentication auht, HttpServletRequest req,
+            @PathVariable ObjectId id,
+            @RequestParam(defaultValue =  "America/Mexico_City") String tz,
+            @RequestParam(defaultValue = "10") int samples
+    ) {
+
+        ObjectId tenantId = hourlySummaryService.resolveTenantId(auht, req);
+        TicketDraftDto dto = ticketDraftService.draftFromAlert(tenantId, id, tz, samples);
+
+        return ApiResponse.ok("Ticket draft", "ai_alert_ticket_draft", dto);
     }
 
 

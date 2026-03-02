@@ -1,14 +1,8 @@
 package backlogs.dinamico.controller.ai;
 
 import backlogs.dinamico.api.ApiResponse;
-import backlogs.dinamico.service.ai.DailyManagerBriefService;
-import backlogs.dinamico.service.ai.DailySummaryService;
-import backlogs.dinamico.service.ai.HourlySummaryService;
-import backlogs.dinamico.service.ai.SummaryInsightsService;
-import backlogs.dinamico.service.ai.dto.DailyManagerBriefDto;
-import backlogs.dinamico.service.ai.dto.DailySummaryDto;
-import backlogs.dinamico.service.ai.dto.HourlySummaryDto;
-import backlogs.dinamico.service.ai.dto.SummaryInsightsDto;
+import backlogs.dinamico.service.ai.*;
+import backlogs.dinamico.service.ai.dto.*;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -57,6 +51,7 @@ public class AiSummariesController {
     private final SummaryInsightsService summaryInsightsService;
 
     private final DailyManagerBriefService dailyManagerBriefService;
+    private final AiDailyManagerTicketDraftService dailyManagerTicketDraftService;
 
     // -------------------- HOURLY --------------------
 
@@ -240,7 +235,7 @@ public class AiSummariesController {
         return ApiResponse.ok("Insights diario", "ai_daily_insights", insights);
     }
 
-    // -------------------- ---------------
+    // -------------------- DAILY MANAGER ---------------
     @Operation(
             summary = "Resumen diario (gerencia)",
             description = """
@@ -260,6 +255,23 @@ public class AiSummariesController {
         ObjectId tenantId = resolveTenantId(auth, req);
         DailyManagerBriefDto dto = dailyManagerBriefService.build(tenantId, tz, from, to);
         return ApiResponse.ok("Resumen diario (gerencia)", "ai_daily_manager_brief", dto);
+    }
+
+    @GetMapping("/daily/ticket/draft")
+    @PreAuthorize("hasAuthority('PERM_LOG_READ')")
+    public ApiResponse<TicketDraftDto> dailyTicketDraft(
+            Authentication auth,
+            HttpServletRequest req,
+            @RequestParam(defaultValue = "7") int days,
+            @RequestParam(defaultValue = DEFAULT_TZ) String tz,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to
+    ) {
+        ObjectId tenantId = resolveTenantId(auth, req);
+
+        TicketDraftDto dto = dailyManagerTicketDraftService.draft(tenantId, days, tz, from, to);
+
+        return ApiResponse.ok("Ticket draft diario (manager)", "ai_daily_ticket_draft", dto);
     }
 
     // -------------------- helpers --------------------
