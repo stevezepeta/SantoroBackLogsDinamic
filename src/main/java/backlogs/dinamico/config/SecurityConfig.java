@@ -80,6 +80,11 @@ public class SecurityConfig {
                             "/api/auth/forgot-password",
                             "/api/auth/reset-password"
                     ).permitAll();
+
+                    // Panel de Santoro
+                    auth.requestMatchers("/api/santoro/panel/**")
+                                    .hasAnyAuthority("ORG_ADMIN", "PERM_SETTINGS_MANAGE");
+
                     auth.requestMatchers(HttpMethod.GET, "/api/auth/qr-token").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/qr-login").authenticated();
 

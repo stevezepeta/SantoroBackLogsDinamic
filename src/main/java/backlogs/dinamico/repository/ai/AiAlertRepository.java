@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.repository.MongoRepository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,5 +23,15 @@ public interface AiAlertRepository extends MongoRepository<AiAlertRecord, Object
     Page<AiAlertRecord> findByTenantIdAndGranularity(ObjectId tenantId, String granularity, Pageable pageable);
 
     Page<AiAlertRecord> findByTenantIdAndGranularityAndState(ObjectId tenantId, String granularity, String state, Pageable pageable);
+
+    // ===================================== ====================================
+    List<AiAlertRecord> findByTenantIdAndGranularityAndBucketStartBetweenOrderByBucketStartAsc(
+            ObjectId tenantId, String granularity, Instant from, Instant to);
+
+    List<AiAlertRecord> findTop60ByTenantIdAndGranularityOrderByBucketStartDesc(
+            ObjectId tenantId, String granularity);
+
+    List<AiAlertRecord> findTop60ByTenantIdAndGranularityAndStatusOrderByBucketStartDesc(
+            ObjectId tenantId, String granularity, String status);
 
 }

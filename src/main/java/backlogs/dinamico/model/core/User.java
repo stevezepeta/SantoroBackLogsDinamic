@@ -18,8 +18,8 @@ import java.time.Instant;
 @Builder
 @org.springframework.data.mongodb.core.mapping.Document(collection = "users")
 @CompoundIndexes({
-    @CompoundIndex(name = "ux_user_tenant_email", def = "{ 'tenant_id': 1, 'email': 1 }", unique = true),
-    @CompoundIndex(name = "ix_user_tenant_status", def = "{ 'tenant_id': 1, 'status': 1 }")
+        @CompoundIndex(name = "ux_user_tenant_email", def = "{ 'tenant_id': 1, 'email': 1 }", unique = true),
+        @CompoundIndex(name = "ix_user_tenant_status", def = "{ 'tenant_id': 1, 'status': 1 }")
 })
 public class User extends BaseEntity {
 
@@ -44,4 +44,13 @@ public class User extends BaseEntity {
 
     @Field("last_login_at")
     private Instant lastLoginAt;
+
+    /**
+     * Indica que el usuario debe cambiar su password en el próximo login.
+     * Se activa a true cuando el admin de Santoro crea al superAdmin de una org.
+     * Se desactiva a false cuando el usuario cambia su password exitosamente.
+     */
+    @Field("must_change_password")
+    @Builder.Default
+    private boolean mustChangePassword = false;
 }

@@ -28,5 +28,24 @@ public interface UserRepository extends MongoRepository<User, ObjectId> {
 
     long countByTenantId(ObjectId tenantId);
 
+    // ------------------------------------
+
+    Page<User> findByTenantIdAndNameContainingIgnoreCaseOrTenantIdAndEmailContainingIgnoreCase(
+            ObjectId tenantId1, String name,
+            ObjectId tenantId2, String email,
+            Pageable pageable);
+
+    long countByTenantIdAndStatus(ObjectId tenantId, String status);
+
+    // Para el panel Santoro — todos los tenants
+    long countByStatus(String status);
+
+    Page<User> findAllByOrderByCreatedAtDesc(Pageable pageable);
+
+    Page<User> findByStatus(String status, Pageable pageable);
+
+    Page<User> findByNameContainingIgnoreCaseOrEmailContainingIgnoreCase(
+            String name, String email, Pageable pageable);
+
 
 }

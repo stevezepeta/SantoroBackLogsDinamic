@@ -6,6 +6,7 @@ import backlogs.dinamico.api.dto.auth.QrLoginRequest;
 import backlogs.dinamico.api.dto.auth.QrTokenResponse;
 import backlogs.dinamico.api.dto.auth.RefreshTokenRequest;
 import backlogs.dinamico.infra.security.JwtTokenService;
+import backlogs.dinamico.model.core.Organization;
 import backlogs.dinamico.model.core.Role;
 import backlogs.dinamico.model.core.User;
 import backlogs.dinamico.repository.core.OrganizationRepository;
@@ -30,6 +31,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -48,12 +50,11 @@ public class WebAuthController {
     private final OrganizationRepository orgRepo;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenService tokens;
-
     private final AuthorizationContextService authorizationContextService;
-
     private final QrLoginService qrLoginService;
 
-    // -------------------- Login --------------------
+    // ── Login ─────────────────────────────────────────────────────────────────
+
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<Map<String, Object>> login(@RequestBody LoginReq req) {
 
@@ -68,8 +69,10 @@ public class WebAuthController {
         User u = userRepo.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new BadCredentialsException("bad"));
 
+        // 1. Validar que el usuario esté activo
         assertActive(u);
 
+        // 2. Validar password
         if (!passwordEncoder.matches(req.getPassword(), u.getPasswordHash())) {
             throw new BadCredentialsException("bad");
         }
@@ -79,41 +82,55 @@ public class WebAuthController {
             throw new ResponseStatusException(INTERNAL_SERVER_ERROR, "user_without_tenant");
         }
 
+        // ── NUEVO: 3. Validar que la organización esté activa ─────────────────
+        Organization org = orgRepo.findById(tenantId)
+                .orElseThrow(() -> new ResponseStatusException(FORBIDDEN, "organization_not_found"));
+
+        if (!"active".equalsIgnoreCase(org.getStatus())) {
+            throw new ResponseStatusException(FORBIDDEN, "organization_disabled");
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
         // Contexto completo (roles + perms + scope)
         AuthorizationContext ctx = authorizationContextService.build(tenantId, u.getId());
 
-        // Tokens nuevos (ya incluyen ctx)
+        // Tokens
         String accessToken  = tokens.generateAccess(u, tenantId, ctx);
         String refreshToken = tokens.generateRefresh(u, tenantId, ctx);
 
-        Map<String, Object> data = Map.of(
-                "organization", orgBlock(tenantId),
-                "user", Map.of(
-                        "id", u.getId().toHexString(),
-                        "email", u.getEmail(),
-                        "name", u.getName()
-                ),
+        // ── NUEVO: 4. Flag mustChangePassword ─────────────────────────────────
+        // Si el usuario tiene contraseña temporal, se le indica al frontend.
+        // El frontend debe redirigir al formulario de cambio de password.
+        // No se bloquea el token — el frontend es responsable de forzar el flujo.
+        boolean mustChange = u.isMustChangePassword();
+        // ─────────────────────────────────────────────────────────────────────
 
-                // útil para UI sin decodificar JWT
-                "authz", Map.of(
-                        "roles", ctx.getRoles(),                 // ["ORG_ADMIN", ...]
-                        "permissions", ctx.getPermissions(),         // ["LOG_READ", ...]
-                        "orgWide", ctx.isOrgWide(),                  // true/false
-                        "systems", ctx.getAllowedSystems(),          // ["BANK_PA", ...] (vacío si orgWide)
-                        "ver", 1
-                ),
-
-                "accessToken", accessToken,
-                "refreshToken", refreshToken
-        );
+        Map<String, Object> data = new HashMap<>();
+        data.put("organization", orgBlock(org));
+        data.put("user", Map.of(
+                "id",    u.getId().toHexString(),
+                "email", u.getEmail(),
+                "name",  u.getName()
+        ));
+        data.put("authz", Map.of(
+                "roles",       ctx.getRoles(),
+                "permissions", ctx.getPermissions(),
+                "orgWide",     ctx.isOrgWide(),
+                "systems",     ctx.getAllowedSystems(),
+                "ver",         1
+        ));
+        data.put("accessToken",          accessToken);
+        data.put("refreshToken",         refreshToken);
+        data.put("mustChangePassword",   mustChange);  // ← NUEVO campo en la respuesta
 
         return ApiResponse.ok("Login exitoso", null, data);
     }
 
+    // ── Refresh ───────────────────────────────────────────────────────────────
 
-    // -------------------- Refresh --------------------
     @PostMapping("/refresh")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> refresh(@Valid @RequestBody RefreshTokenRequest req) {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> refresh(
+            @Valid @RequestBody RefreshTokenRequest req) {
 
         try {
             Claims claims = tokens.verifyRefresh(req.refreshToken());
@@ -125,7 +142,9 @@ public class WebAuthController {
 
             String tenantIdHex = claims.get("tenantId", String.class);
 
-            if (!StringUtils.hasText(email) || !StringUtils.hasText(tenantIdHex) || !ObjectId.isValid(tenantIdHex)) {
+            if (!StringUtils.hasText(email) ||
+                    !StringUtils.hasText(tenantIdHex) ||
+                    !ObjectId.isValid(tenantIdHex)) {
                 throw new IllegalArgumentException("Invalid refresh token claims");
             }
 
@@ -136,65 +155,60 @@ public class WebAuthController {
 
             assertActive(user);
 
-            // authz actualizado (por si cambiaron roles/scope mientras el usuario estaba logueado)
+            // ── NUEVO: verificar org activa también en refresh ────────────────
+            Organization org = orgRepo.findById(tenantId).orElse(null);
+            if (org == null || !"active".equalsIgnoreCase(org.getStatus())) {
+                return ResponseEntity.status(FORBIDDEN)
+                        .body(ApiResponse.error("organization_disabled",
+                                "La organización está deshabilitada.", null));
+            }
+            // ─────────────────────────────────────────────────────────────────
+
             var ctx = authorizationContextService.build(tenantId, user.getId());
 
-            // nuevo access token (incluye roles/perms/scope en claims)
             String newAccessToken = tokens.generateAccess(user);
+            String refreshToken   = req.refreshToken();
 
-            // sin rotación de refresh (igual que ahorita)
-            String refreshToken = req.refreshToken();
-
-            // MISMA estructura + authz
             Map<String, Object> data = Map.of(
-                    "accessToken", newAccessToken,
+                    "accessToken",  newAccessToken,
                     "refreshToken", refreshToken,
-                    "tokenType", "Bearer",
+                    "tokenType",    "Bearer",
                     "authz", Map.of(
-                            "roles", ctx.getRoles(),
+                            "roles",       ctx.getRoles(),
                             "permissions", ctx.getPermissions(),
-                            "orgWide", ctx.isOrgWide(),
-                            "systems", ctx.getAllowedSystems(),
-                            "ver", 1
+                            "orgWide",     ctx.isOrgWide(),
+                            "systems",     ctx.getAllowedSystems(),
+                            "ver",         1
                     )
             );
 
-            // A) Mantener EXACTO tu "code" como hoy (para que se vea igual en Postman)
             return ResponseEntity.ok(ApiResponse.success("Token refreshed", data));
-
-            // hacerlo más correcto (code estable + message):
-            // return ResponseEntity.ok(ApiResponse.success("token_refreshed", "Token refreshed", data));
 
         } catch (JwtException | IllegalArgumentException | IllegalStateException ex) {
             return ResponseEntity.status(UNAUTHORIZED)
-                    .body(ApiResponse.error(
-                            "invalid_refresh_token",
-                            ex.getMessage(),
-                            null
-                    ));
+                    .body(ApiResponse.error("invalid_refresh_token", ex.getMessage(), null));
         }
     }
 
-    // -------------------- QR token (PC) --------------------
+    // ── QR ────────────────────────────────────────────────────────────────────
+
     @GetMapping("/qr-token")
     public ResponseEntity<ApiResponse> createQrToken() {
         QrTokenResponse qrToken = qrLoginService.createQrToken();
         return ResponseEntity.ok(ApiResponse.success("Qr Token generado", qrToken));
     }
 
-    // -------------------- QR login (móvil) --------------------
     @PostMapping("/qr-login")
-    public ResponseEntity<ApiResponse> qrLogin(@Valid @RequestBody QrLoginRequest request,
-                                               org.springframework.security.core.Authentication auth) {
+    public ResponseEntity<ApiResponse> qrLogin(
+            @Valid @RequestBody QrLoginRequest request,
+            org.springframework.security.core.Authentication auth) {
 
         LoginResponse login = qrLoginService.loginWithQrToken(request.qrToken(), auth);
-
-        return ResponseEntity.ok(
-                ApiResponse.success("Qr Login successful", login)
-        );
+        return ResponseEntity.ok(ApiResponse.success("Qr Login successful", login));
     }
 
-    // -------------------- Helpers --------------------
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private void assertActive(User u) {
         if (u == null) throw new BadCredentialsException("bad");
         if (!"active".equalsIgnoreCase(u.getStatus())) {
@@ -210,19 +224,29 @@ public class WebAuthController {
                 .toList();
     }
 
+    // Versión original — recibe ObjectId, consulta la org
     private Map<String, Object> orgBlock(ObjectId tenantId) {
         return orgRepo.findById(tenantId)
                 .<Map<String, Object>>map(o -> Map.of(
-                        "id", o.getId().toHexString(),
+                        "id",   o.getId().toHexString(),
                         "name", o.getName()
                 ))
                 .orElseGet(() -> Map.of(
-                        "id", tenantId.toHexString(),
+                        "id",   tenantId.toHexString(),
                         "name", "(unknown)"
                 ));
     }
 
-    // -------------------- DTOs --------------------
+    // Sobrecarga — recibe la org ya cargada (evita segunda consulta a MongoDB)
+    private Map<String, Object> orgBlock(Organization org) {
+        return Map.of(
+                "id",   org.getId().toHexString(),
+                "name", org.getName()
+        );
+    }
+
+    // ── DTOs ──────────────────────────────────────────────────────────────────
+
     @Data
     public static class RegisterReq {
         private String email;

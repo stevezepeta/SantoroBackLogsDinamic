@@ -1,13 +1,14 @@
 package backlogs.dinamico.service.ai;
 
 import backlogs.dinamico.model.ai.AiAlertRecord;
+import backlogs.dinamico.model.ai.AiMetricRecord;
 import backlogs.dinamico.repository.ai.AiAlertRepository;
+import backlogs.dinamico.repository.ai.AiMetricRepository;
 import backlogs.dinamico.service.ai.dto.DailySummaryDto;
 import backlogs.dinamico.service.ai.dto.HourlySummaryDto;
 import backlogs.dinamico.service.ai.dto.SummaryInsightsDto;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
-import org.springframework.cglib.core.Local;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
@@ -22,45 +23,23 @@ import java.util.stream.Collectors;
 public class SummaryInsightsService {
 
     private final AiAlertRepository alertRepo;
+    private final AiMetricRepository metricRepo;
+    private final TrendAnomalyService trendAnomalyService;
 
     // thresholds (puedes moverlos a application.yml después)
-    private static final double ERR_WARN = 0.20; // 20%
-    private static final double ERR_CRIT = 0.50; // 50%
+    private static final double ERR_WARN = 0.05; // 5%
+    private static final double ERR_CRIT = 0.15; // 15%
+
+    // ---------- Absolute error -----------
+    private static final long ERR_COUNT_WARN = 50;
+    private static final long ERR_COUNT_CRIT = 200;
+
+    private static final long MIN_TOTAL_FOR_RATE = 200;
 
     private static final double DOMINANCE_WARN = 0.80; // 80% del total en 1 system
     private static final long   SPIKE_MIN_ABS = 200;   // mínimo absoluto para considerar spike
     private static final double SPIKE_WARN_X  = 2.0;   // 2x promedio
     private static final double SPIKE_CRIT_X  = 3.0;   // 3x promedio
-
-    // ==================== PUBLIC API ====================
-
-    public SummaryInsightsDto fromHourly(HourlySummaryDto s) {
-        SummaryInsightsDto out = baseFromHourly(s);
-        computeOperationalAlerts(out, s.buckets, true);
-        // No persistimos sin tenant
-        return out;
-    }
-
-    public SummaryInsightsDto fromDaily(DailySummaryDto s) {
-        SummaryInsightsDto out = baseFromDaily(s);
-        computeOperationalAlerts(out, s.buckets, false);
-        // No persistimos sin tenant
-        return out;
-    }
-
-    public SummaryInsightsDto fromHourly(ObjectId tenantId, HourlySummaryDto s) {
-        SummaryInsightsDto out = baseFromHourly(s);
-        computeOperationalAlerts(out, s.buckets, true);
-        persistIfNeeded(tenantId, out, s.buckets, true);
-        return out;
-    }
-
-    public SummaryInsightsDto fromDaily(ObjectId tenantId, DailySummaryDto s) {
-        SummaryInsightsDto out = baseFromDaily(s);
-        computeOperationalAlerts(out, s.buckets, false);
-        persistIfNeeded(tenantId, out, s.buckets, false);
-        return out;
-    }
 
     // ==================== BASE INSIGHTS ====================
     private SummaryInsightsDto baseFromHourly(HourlySummaryDto s) {
@@ -357,6 +336,13 @@ public class SummaryInsightsService {
             errorCount = out.severities.getOrDefault("ERROR", 0L) + out.severities.getOrDefault("FATAL", 0L);
         }
 
+        // ====== NUEVOS UMBRALES DE PORCENTAJE ======
+        final long minToTalForRate = hourly ? 50L : MIN_TOTAL_FOR_RATE;
+
+        // ====== UMBRALES ABSOLUTOS ======
+        final long ERR_WARN_ABS = hourly ? 10L : 50L;
+        final long ERR_CRIT_ABS = hourly ? 40L : 200L;
+
         // No data
         if (out.total == 0) {
             alerts.add(new SummaryInsightsDto.Alert(
@@ -369,42 +355,102 @@ public class SummaryInsightsService {
                             "to", out.to
                     )
             ));
-            out.warnings.add("No hay data: revisa si el sistema esta enviando logs o si el rango es correcto.");
+            out.warnings.add("No hay data: revisa si el sistema está enviando logs o si el rango es correcto.");
         }
 
-        // High error rate
-        if (out.errorRate >= ERR_CRIT) {
+        // -------------------------
+        // Alertas por ERROR RATE
+        // -------------------------
+        boolean rateTriggered = false;
+
+        boolean rateCrit = (out.total >= minToTalForRate) && (out.errorRate >= ERR_CRIT);
+        boolean rateWarn = (out.total >= minToTalForRate) && (out.errorRate >= ERR_WARN);
+
+        if (rateCrit) {
+            rateTriggered = true;
             alerts.add(new SummaryInsightsDto.Alert(
                     "HIGH_ERROR_RATE", "CRIT",
-                    "Error rate critico (" + pct(out.errorRate) + ").",
+                    "Error rate crítico (" + pct(out.errorRate) + ").",
                     null, null,
                     meta(
                             "errorRate", out.errorRate,
                             "errorCount", errorCount,
                             "total", out.total,
                             "threshold", ERR_CRIT,
+                            "minTotalForRate", minToTalForRate,
                             "topSystemRange", topSystemRange,
-                            "topErrorRange", topErrorRange
+                            "topSystemRangeCount", topSystemRangeCount,
+                            "topErrorRange", topErrorRange,
+                            "topErrorRangeCount", topErrorRangeCount
                     )
             ));
-            out.warnings.add("Error rate CRITICO: " + pct(out.errorRate) + " (" + errorCount + " errores).");
-            out.recommendations.add("Revisar topErrors y correlacion (requestId/traceId). Escalar si afecta operacion");
-        } else if (out.errorRate >= ERR_WARN) {
-            alerts.add( new SummaryInsightsDto.Alert(
+            out.warnings.add("Error rate CRÍTICO: " + pct(out.errorRate) + " (" + errorCount + " errores).");
+            out.recommendations.add("Revisar topErrors y correlación (requestId/traceId). Escalar si afecta operación.");
+        } else if (rateWarn) {
+            rateTriggered = true;
+            alerts.add(new SummaryInsightsDto.Alert(
                     "HIGH_ERROR_RATE", "WARN",
                     "Error rate elevado (" + pct(out.errorRate) + ").",
                     null, null,
                     meta(
-                        "errorRate", out.errorRate,
-                        "errorCount", errorCount,
-                        "total", out.total,
-                        "threshold", ERR_WARN,
-                        "topSystemRange", topSystemRange,
-                        "topErrorRange", topErrorRange
+                            "errorRate", out.errorRate,
+                            "errorCount", errorCount,
+                            "total", out.total,
+                            "threshold", ERR_WARN,
+                            "minTotalForRate", minToTalForRate,
+                            "topSystemRange", topSystemRange,
+                            "topSystemRangeCount", topSystemRangeCount,
+                            "topErrorRange", topErrorRange,
+                            "topErrorRangeCount", topErrorRangeCount
                     )
             ));
             out.warnings.add("Error rate alto: " + pct(out.errorRate) + " (" + errorCount + " errores).");
             out.recommendations.add("Revisar si hubo deploy/cambio reciente. Ver topErrorsRange y topSystemsRange.");
+        }
+
+        // -------------------------------------
+        // Alertas por ERROR COUNT ABSOLUTO
+        // -------------------------------------
+        if (out.total > 0 && errorCount > 0) {
+            if (errorCount >= ERR_CRIT_ABS) {
+                alerts.add(new SummaryInsightsDto.Alert(
+                        "HIGH_ERROR_COUNT", "CRIT",
+                        "Volumen de errores crítico (" + errorCount + " errores) aunque el porcentaje sea " + pct(out.errorRate) + ".",
+                        null, null,
+                        meta(
+                                "errorCount", errorCount,
+                                "errorRate", out.errorRate,
+                                "total", out.total,
+                                "thresholdAbs", ERR_CRIT_ABS,
+                                "granularity", out.granularity,
+                                "topSystemRange", topSystemRange,
+                                "topSystemRangeCount", topSystemRangeCount,
+                                "topErrorRange", topErrorRange,
+                                "topErrorRangeCount", topErrorRangeCount
+                        )
+                ));
+                out.warnings.add("Errores ABSOLUTOS CRÍTICOS: " + errorCount + " errores (rate " + pct(out.errorRate) + ").");
+                out.recommendations.add("Priorizar análisis por volumen: topErrorsRange, spikes, y correlación por system/requestId.");
+            } else if (!rateTriggered && errorCount >= ERR_WARN_ABS) {
+                alerts.add(new SummaryInsightsDto.Alert(
+                        "HIGH_ERROR_COUNT", "WARN",
+                        "Volumen de errores alto (" + errorCount + " errores) aunque el porcentaje sea " + pct(out.errorRate) + ".",
+                        null, null,
+                        meta(
+                                "errorCount", errorCount,
+                                "errorRate", out.errorRate,
+                                "total", out.total,
+                                "thresholdAbs", ERR_WARN_ABS,
+                                "granularity", out.granularity,
+                                "topSystemRange", topSystemRange,
+                                "topSystemRangeCount", topSystemRangeCount,
+                                "topErrorRange", topErrorRange,
+                                "topErrorRangeCount", topErrorRangeCount
+                        )
+                ));
+                out.warnings.add("Errores ABSOLUTOS ALTOS: " + errorCount + " errores (rate " + pct(out.errorRate) + ").");
+                out.recommendations.add("Revisar topErrorsRange/topSystemsRange; abrir tickets P2 si afecta operación.");
+            }
         }
 
         // System dominance
@@ -416,7 +462,7 @@ public class SummaryInsightsService {
             if (share >= DOMINANCE_WARN) {
                 alerts.add(new SummaryInsightsDto.Alert(
                         "SYSTEM_DOMINANCE", "INFO",
-                        "Un solo system domina el trafico: " + dom.name + " (" + String.format(Locale.ROOT, "%.0f%%", share * 100.0) + ").",
+                        "Un solo system domina el tráfico: " + dom.name + " (" + String.format(Locale.ROOT, "%.0f%%", share * 100.0) + ").",
                         null, null,
                         meta(
                                 "system", dom.name,
@@ -425,7 +471,7 @@ public class SummaryInsightsService {
                                 "total", out.total
                         )
                 ));
-                out.highlights.add("Dominancia: " + dom.name + " concentra" + String.format(Locale.ROOT, "%.0f%%", share * 100.0) + " del trafico.");
+                out.highlights.add("Dominancia: " + dom.name + " concentra " + String.format(Locale.ROOT, "%.0f%%", share * 100.0) + " del tráfico.");
             }
         }
 
@@ -447,7 +493,6 @@ public class SummaryInsightsService {
                         ? lastActiveTimeHourly(castHourly(buckets))
                         : lastActiveTimeDaily(castDaily(buckets));
 
-                // meta enriquecida
                 Map<String, Object> spikeMeta = meta(
                         "lastTotal", lastTotal,
                         "avg", avg,
@@ -456,19 +501,20 @@ public class SummaryInsightsService {
                         "errorRate", out.errorRate,
                         "errorCount", errorCount,
                         "topSystemRange", topSystemRange,
-                        "topErrorRange", topErrorRangeCount,
+                        "topSystemRangeCount", topSystemRangeCount,
+                        "topErrorRange", topErrorRange,
                         "topErrorRangeCount", topErrorRangeCount
-                    );
+                );
 
                 if (lastTotal >= SPIKE_MIN_ABS && factor >= SPIKE_CRIT_X) {
                     alerts.add(new SummaryInsightsDto.Alert(
                             "VOLUMEN_SPIKE", "CRIT",
-                            "Spike critico de volumen: " + lastTotal + " (" + String.format(Locale.ROOT, "%.1fx", factor) + " del promedio).",
+                            "Spike crítico de volumen: " + lastTotal + " (" + String.format(Locale.ROOT, "%.1fx", factor) + " del promedio).",
                             bucketTimes[0], bucketTimes[1],
                             spikeMeta
                     ));
-                    out.warnings.add("Spike CRITICO: " + lastTotal + " eventos en el ultimo bucket activo.");
-                    out.recommendations.add("Revisar loop/reintentos masivos/integracion duplicada. Ver TopSystemRange y topErrorRange.");
+                    out.warnings.add("Spike CRÍTICO: " + lastTotal + " eventos en el último bucket activo.");
+                    out.recommendations.add("Revisar loop/reintentos masivos/integración duplicada. Ver TopSystemRange y topErrorRange.");
                 } else if (lastTotal >= SPIKE_MIN_ABS && factor >= SPIKE_WARN_X) {
                     alerts.add(new SummaryInsightsDto.Alert(
                             "VOLUMEN_SPIKE", "WARN",
@@ -476,11 +522,12 @@ public class SummaryInsightsService {
                             bucketTimes[0], bucketTimes[1],
                             spikeMeta
                     ));
-                    out.warnings.add("Spike: " + lastTotal + " eventos en el ultimo bucket activo.");
+                    out.warnings.add("Spike: " + lastTotal + " eventos en el último bucket activo.");
                     out.recommendations.add("Validar cambios recientes (deploy/config) y revisar topSystem/topErrors del bucket.");
                 }
             }
         }
+
         out.alerts = alerts;
         out.status = deriveStatus(alerts);
     }
@@ -491,14 +538,10 @@ public class SummaryInsightsService {
         return x.length() <= 140 ? x : x.substring(0, 140) + "...";
     }
 
-    // ==================== PERSIST ====================
-    private void persistIfNeeded(ObjectId tenantId, SummaryInsightsDto out, List<?> buckets, boolean hourly) {
-        if (tenantId == null) return;
+    private void persistMetricsUpsertPerSystem(ObjectId tenantId, SummaryInsightsDto out, List<?> buckets, boolean hourly) {
+        if (tenantId == null || out == null) return;
 
-        // Persistimos SOLO si hay WARN/CRIT
-        boolean hasImportant = out.alerts != null && out.alerts.stream().anyMatch(a -> !"INFO".equals(a.level));
-        if (!hasImportant) return;
-
+        // bucketStart = inicio del último bucket activo
         Instant bucketStart = null;
         if (hourly) {
             var last = lastActiveBucketHourly(castHourly(buckets));
@@ -507,11 +550,205 @@ public class SummaryInsightsService {
             var last = lastActiveBucketDaily(castDaily(buckets));
             if (last != null && last.dayStart != null) bucketStart = Instant.parse(last.dayStart);
         }
+        if (bucketStart == null) return;
 
-        // fingerprint para dedupe
-        String fp = sha1(out.granularity + "|" + out.from + "|" + out.to + "|" + out.status + "|" +
-                (bucketStart == null ? "-" : bucketStart.toString()) + "|" +
-                (out.alerts == null ? "-" : out.alerts.stream().map(a -> a.type + ":" + a.level).collect(Collectors.joining(",")))
+        // errorCount total del rango (más confiable: sumar errorTotal de buckets)
+        long errorCountTotal = hourly
+                ? sumErrorTotalHourly(castHourly(buckets))
+                : sumErrorTotalDaily(castDaily(buckets));
+
+        // fallback
+        if (errorCountTotal == 0 && out.severities != null) {
+            errorCountTotal = out.severities.getOrDefault("ERROR", 0L) + out.severities.getOrDefault("FATAL", 0L);
+        }
+
+        // systems del rango (top 5)
+        List<SummaryInsightsDto.TopItem> systems = (out.topSystemsRange == null) ? List.of() : out.topSystemsRange;
+        int limit = Math.min(systems.size(), 5);
+        if (limit <= 0) return;
+
+        for (int i = 0; i < limit; i++) {
+            SummaryInsightsDto.TopItem it = systems.get(i);
+            if (it == null || it.name == null || it.name.isBlank()) continue;
+
+            String system = it.name.trim();
+            long totalSystem = Math.max(0, it.count);
+
+            // Aproximación: errores por proporción del tráfico del system dentro del total del rango
+            long errSystem = (out.total > 0 && totalSystem > 0)
+                    ? Math.round(((double) totalSystem / (double) out.total) * (double) errorCountTotal)
+                    : 0L;
+
+            double rateSystem = (totalSystem <= 0) ? 0.0 : ((double) errSystem / (double) totalSystem);
+
+            var existingOpt = metricRepo.findFirstByTenantIdAndGranularityAndBucketStartAndSystem(
+                    tenantId, out.granularity, bucketStart, system
+            );
+
+            AiMetricRecord rec = existingOpt.orElseGet(AiMetricRecord::new);
+
+            if (rec.getId() == null) {
+                rec.setTenantId(tenantId);
+                rec.setGranularity(out.granularity);
+                rec.setBucketStart(bucketStart);
+                rec.setSystem(system);
+                rec.setCreatedAt(Instant.now());
+            }
+
+            rec.setUpdatedAt(Instant.now());
+
+            // ventana del resumen
+            if (out.from != null) rec.setWindowFrom(Instant.parse(out.from));
+            if (out.to != null)   rec.setWindowTo(Instant.parse(out.to));
+
+            // strings UI
+            rec.setTz(out.tz);
+            rec.setWindowFromLocal(out.fromLocal);
+            rec.setWindowToLocal(out.toLocal);
+            rec.setBucketStartLocal(null); // si tu AiMetricRecord lo tiene, puedes llenarlo
+
+            // métricas por system
+            rec.setTotal(totalSystem);
+            rec.setErrorCount(errSystem);
+            rec.setErrorRate(rateSystem);
+
+            // contexto opcional
+            rec.setTopErrorKey(firstKey(out.topErrorsRange));
+
+            metricRepo.save(rec);
+        }
+    }
+
+    // ==================== PUBLIC API ====================
+    public SummaryInsightsDto fromHourly(ObjectId tenantId, HourlySummaryDto s) {
+        SummaryInsightsDto out = baseFromHourly(s);
+
+        // 1) Alertas por reglas (rate/count/spike/dominance)
+        computeOperationalAlerts(out, s == null ? null : s.buckets, true);
+
+        // 2) Persistir serie por system (para histórico)
+        persistMetricsUpsertPerSystem(tenantId, out, s == null ? null : s.buckets, true);
+
+        // 3) Detectar anomalías por tendencia histórica (por system)
+        List<SummaryInsightsDto.Alert> trendAlerts = trendAnomalyService.detectPerSystem(tenantId, out);
+        if (trendAlerts != null && !trendAlerts.isEmpty()) {
+            if (out.alerts == null) out.alerts = new ArrayList<>();
+            out.alerts.addAll(trendAlerts);
+
+            // recalcular status (puede subir a WARN/CRIT)
+            out.status = deriveStatus(out.alerts);
+
+            // opcional: reflejar mensajes en warnings para UI
+            out.warnings = mutable(out.warnings);
+            Set<String> seen = new HashSet<>(out.warnings);
+            for (var a : trendAlerts) {
+                if (a == null || a.message == null) continue;
+                if ("WARN".equalsIgnoreCase(a.level) || "CRIT".equalsIgnoreCase(a.level)) {
+                    if (seen.add(a.message)) out.warnings.add(a.message);
+                }
+            }
+        }
+
+        // 4) Persistir alertas si hay WARN/CRIT
+        persistAlertsIfNeeded(tenantId, out, s == null ? null : s.buckets, true);
+
+        return out;
+    }
+
+    public SummaryInsightsDto fromDaily(ObjectId tenantId, DailySummaryDto s) {
+        SummaryInsightsDto out = baseFromDaily(s);
+
+        // 1) Alertas por reglas
+        computeOperationalAlerts(out, s == null ? null : s.buckets, false);
+
+        // 2) Persistir serie por system
+        persistMetricsUpsertPerSystem(tenantId, out, s == null ? null : s.buckets, false);
+
+        // 3) Detectar anomalías por tendencia histórica (por system)
+        List<SummaryInsightsDto.Alert> trendAlerts = trendAnomalyService.detectPerSystem(tenantId, out);
+        if (trendAlerts != null && !trendAlerts.isEmpty()) {
+            if (out.alerts == null) out.alerts = new ArrayList<>();
+            out.alerts.addAll(trendAlerts);
+
+            out.status = deriveStatus(out.alerts);
+
+            out.warnings = mutable(out.warnings);
+            Set<String> seen = new HashSet<>(out.warnings);
+            for (var a : trendAlerts) {
+                if (a == null || a.message == null) continue;
+                if ("WARN".equalsIgnoreCase(a.level) || "CRIT".equalsIgnoreCase(a.level)) {
+                    if (seen.add(a.message)) out.warnings.add(a.message);
+                }
+            }
+        }
+
+        // 4) Persistir alertas si hay WARN/CRIT
+        persistAlertsIfNeeded(tenantId, out, s == null ? null : s.buckets, false);
+
+        return out;
+    }
+
+    // ==================== PERSIST ====================
+    private void persistAlertsIfNeeded(ObjectId tenantId, SummaryInsightsDto out, List<?> buckets, boolean hourly) {
+        if (tenantId == null || out == null) return;
+
+        List<SummaryInsightsDto.Alert> alerts = (out.alerts == null) ? List.of() : out.alerts;
+
+        // Persistimos SOLO si hay WARN/CRIT (ignoramos INFO y nulls)
+        boolean hasImportant = alerts.stream()
+                .filter(Objects::nonNull)
+                .map(a -> a.level)
+                .filter(Objects::nonNull)
+                .anyMatch(l -> !"INFO".equalsIgnoreCase(l));
+
+        if (!hasImportant) return;
+
+        // bucketStart (último bucket activo)
+        Instant bucketStart = null;
+        try {
+            if (hourly) {
+                var last = lastActiveBucketHourly(castHourly(buckets));
+                if (last != null && last.hourStart != null) bucketStart = Instant.parse(last.hourStart);
+            } else {
+                var last = lastActiveBucketDaily(castDaily(buckets));
+                if (last != null && last.dayStart != null) bucketStart = Instant.parse(last.dayStart);
+            }
+        } catch (Exception ignored) {
+            // si no se puede parsear, lo dejamos null (no rompe persistencia)
+            bucketStart = null;
+        }
+
+        // Parse window instants de forma segura
+        Instant windowFrom = null;
+        Instant windowTo = null;
+        try { if (out.from != null) windowFrom = Instant.parse(out.from); } catch (Exception ignored) {}
+        try { if (out.to != null) windowTo = Instant.parse(out.to); } catch (Exception ignored) {}
+        
+        // incluye type|level|system(meta.system si existe) para dedupe correcto "por system"
+        String alertsSig = alerts.stream()
+                .filter(Objects::nonNull)
+                .map(a -> {
+                    String type = (a.type == null) ? "-" : a.type.trim();
+                    String level = (a.level == null) ? "-" : a.level.trim().toUpperCase(Locale.ROOT);
+                    String system = "-";
+                    if (a.meta != null) {
+                        Object s = a.meta.get("system");
+                        if (s != null) system = String.valueOf(s).trim();
+                    }
+                    return type + "|" + level + "|" + system;
+                })
+                .distinct()
+                .sorted()
+                .collect(Collectors.joining(","));
+
+        // fingerprint para dedupe (más estable)
+        String fp = sha1(
+                String.valueOf(out.granularity) + "|" +
+                        String.valueOf(out.from) + "|" +
+                        String.valueOf(out.to) + "|" +
+                        String.valueOf(out.status) + "|" +
+                        (bucketStart == null ? "-" : bucketStart.toString()) + "|" +
+                        alertsSig
         );
 
         if (alertRepo.findFirstByTenantIdAndFingerprint(tenantId, fp).isPresent()) return;
@@ -519,25 +756,53 @@ public class SummaryInsightsService {
         AiAlertRecord rec = new AiAlertRecord();
         rec.setTenantId(tenantId);
         rec.setGranularity(out.granularity);
-        rec.setWindowFrom(Instant.parse(out.from));
-        rec.setWindowTo(Instant.parse(out.to));
+
+        // ventana (si no parsea, queda null y no truena)
+        rec.setWindowFrom(windowFrom);
+        rec.setWindowTo(windowTo);
+
         rec.setBucketStart(bucketStart);
         rec.setCreatedAt(Instant.now());
+
         rec.setStatus(out.status);
         rec.setTotal(out.total);
         rec.setErrorRate(out.errorRate);
+
         rec.setSeverities(out.severities);
-        rec.setAlerts(out.alerts);
+        rec.setAlerts(alerts);
+
         rec.setFingerprint(fp);
+
+        // Opcional (si ya tienes esos campos en AiAlertRecord):
+        // rec.setTz(out.tz);
+        // rec.setWindowFromLocal(out.fromLocal);
+        // rec.setWindowToLocal(out.toLocal);
+        // rec.setBucketStartLocal(null); // si lo quieres llenar, conviértelo aquí
 
         alertRepo.save(rec);
     }
 
+
     // ==================== HELPERS ====================
     private String deriveStatus(List<SummaryInsightsDto.Alert> alerts) {
         if (alerts == null || alerts.isEmpty()) return "OK";
-        if (alerts.stream().anyMatch(a -> "CRIT".equals(a.level))) return "CRIT";
-        if (alerts.stream().anyMatch(a -> "WARN".equals(a.level))) return "WARN";
+
+        boolean hasCrit = alerts.stream()
+                .filter(Objects::nonNull)
+                .map(a -> a.level)
+                .filter(Objects::nonNull)
+                .anyMatch(l -> "CRIT".equalsIgnoreCase(l));
+
+        if (hasCrit) return "CRIT";
+
+        boolean hasWarn = alerts.stream()
+                .filter(Objects::nonNull)
+                .map(a -> a.level)
+                .filter(Objects::nonNull)
+                .anyMatch(l -> "WARN".equalsIgnoreCase(l));
+
+        if (hasWarn) return "WARN";
+
         return "OK";
     }
 

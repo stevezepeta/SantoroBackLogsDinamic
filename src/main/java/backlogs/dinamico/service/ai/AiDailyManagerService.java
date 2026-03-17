@@ -52,21 +52,20 @@ public class AiDailyManagerService {
     public DailyManagerSummaryDto buildManagerSummary(ObjectId tenantId, int days, String tz, Instant from, Instant to) {
         ZoneId zone = safeZone(tz);
 
-        // Si no mandan rango, tomamos “últimos N días completos” alineado a día
-        Instant now = Instant.now();
-        Instant rangeTo = (to != null) ? to : now;
-        Instant rangeFrom = (from != null) ? from : rangeTo.minus(Math.max(days, 1), ChronoUnit.DAYS);
+        // Ultimo N dias completos
+        TimeRange r = lastNDaysComplete(zone, days, from, to);
 
-        DailySummaryDto daily = dailySummaryService.buildDailySummary(tenantId, days, zone.getId(), rangeFrom, rangeTo);
+        DailySummaryDto daily = dailySummaryService.buildDailySummary(tenantId, r.days, zone.getId(), r.from, r.to);
         SummaryInsightsDto insights = summaryInsightsService.fromDaily(tenantId, daily);
 
         DailyManagerSummaryDto out = new DailyManagerSummaryDto();
         out.tz = zone.getId();
-        out.from = insights.from;
-        out.to = insights.to;
-        out.fromLocal = toLocal(Instant.parse(insights.from), zone);
-        out.toLocal = toLocal(Instant.parse(insights.to), zone);
-        out.days = (insights.days != null) ? insights.days : days;
+
+        out.from = r.from.toString();
+        out.to = r.to.toString();
+        out.fromLocal = toLocal(r.from, zone);
+        out.toLocal = toLocal(r.to, zone);
+        out.days = r.days;
 
         out.total = insights.total;
         out.errorRate = insights.errorRate;
@@ -84,8 +83,8 @@ public class AiDailyManagerService {
         if (out.topErrorsRange == null || out.topErrorsRange.isEmpty()) {
             String topSys = firstTopName(out.topSystemsRange);
             out.topErrorsRange = aggregateTopErrorRange(tenantId,
-                    Instant.parse(out.from),
-                    Instant.parse(out.to),
+                    r.from,
+                    r.to,
                     topSys,
                     5);
         }
@@ -138,19 +137,12 @@ public class AiDailyManagerService {
             int maxTickets
     ) {
         ZoneId zone = safeZone(tz);
+        TimeRange r = lastNDaysComplete(zone, days, from, to);
 
-        DailyManagerSummaryDto mgr = buildManagerSummary(tenantId, days, zone.getId(), from, to);
+        DailyManagerSummaryDto mgr = buildManagerSummary(tenantId, days, zone.getId(), r.from, r.to);
 
-        ZonedDateTime endExclusive = (to != null)
-                ? ceilToDay(ZonedDateTime.ofInstant(to, zone))
-                : ZonedDateTime.now(zone).truncatedTo(ChronoUnit.DAYS);
-
-        ZonedDateTime startInclusive = (from != null)
-                ? ZonedDateTime.ofInstant(from, zone).truncatedTo(ChronoUnit.DAYS)
-                : endExclusive.minusDays(Math.max(days, 1));
-
-        Instant rangeFrom = startInclusive.toInstant();
-        Instant rangeTo = endExclusive.toInstant();
+        Instant rangeFrom = r.from;
+        Instant rangeTo = r.to;
 
         int safeMax = Math.min(Math.max(maxTickets, 1), 10);
 
@@ -456,4 +448,44 @@ public class AiDailyManagerService {
     private static List<SummaryInsightsDto.TopError> safeListErrors(List<SummaryInsightsDto.TopError> x) {
         return x == null ? new ArrayList<>() : x;
     }
+
+    private static class TimeRange {
+        final Instant from;
+        final  Instant to;
+        final int days;
+        TimeRange(Instant from, Instant to, int days) {
+            this.from = from;
+            this.to = to;
+            this.days = days;
+        }
+    }
+
+    /**
+     * Ultimos N dias completos (dia calendario)
+     */
+    private static TimeRange lastNDaysComplete(ZoneId zone, int days, Instant from, Instant to) {
+        int d = Math.max(days, 1);
+
+        // Si el usuario manda rango explícito, lo respetamos (pero alineamos a día)
+        if (from != null || to != null) {
+            ZonedDateTime end = (to != null)
+                    ? ceilToDay(ZonedDateTime.ofInstant(to, zone))
+                    : ZonedDateTime.now(zone).truncatedTo(ChronoUnit.DAYS);
+
+            ZonedDateTime start = (from != null)
+                    ? ZonedDateTime.ofInstant(from, zone).truncatedTo(ChronoUnit.DAYS)
+                    : end.minusDays(d);
+
+            Instant f = start.toInstant();
+            Instant t = end.toInstant();
+            int effectiveDays = (int) ChronoUnit.DAYS.between(start, end);
+            return new TimeRange(f, t, Math.max(effectiveDays, 1));
+        }
+
+        // Caso normal days=N sin rango explícito
+        ZonedDateTime endExclusive = ZonedDateTime.now(zone).truncatedTo(ChronoUnit.DAYS); // inicio de HOY
+        ZonedDateTime startInclusive = endExclusive.minusDays(d); // inicio de hace N días
+        return new TimeRange(startInclusive.toInstant(), endExclusive.toInstant(), d);
+    }
+
 }
