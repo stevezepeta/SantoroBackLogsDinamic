@@ -16,7 +16,6 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 
-
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -26,9 +25,8 @@ import java.util.stream.Collectors;
 public class AuthorizationContextService {
 
     private final UserRoleRepository userRoleRepository;
-    private final RoleRepository roleRepository;
-
-    private final MongoTemplate mongoTemplate;
+    private final RoleRepository     roleRepository;
+    private final MongoTemplate      mongoTemplate;
 
     public AuthorizationContext build(ObjectId tenantId, ObjectId userId) {
 
@@ -40,6 +38,7 @@ public class AuthorizationContextService {
                     .allowedSystems(Set.of())
                     .roles(Set.of())
                     .permissions(Set.of())
+                    .logFilters(new UserRole.LogFilter())
                     .build();
         }
 
@@ -54,10 +53,10 @@ public class AuthorizationContextService {
                     .allowedSystems(Set.of())
                     .roles(Set.of())
                     .permissions(Set.of())
+                    .logFilters(new UserRole.LogFilter())
                     .build();
         }
 
-        // FIX: filtrar por tenant
         List<Role> roles = roleRepository.findByTenantIdAndIdIn(tenantId, roleIds);
 
         Map<ObjectId, Role> roleById = roles.stream()
@@ -66,9 +65,18 @@ public class AuthorizationContextService {
 
         boolean orgWide = false;
 
-        Set<String> roleCodes = new HashSet<>();
-        Set<String> permissions = new HashSet<>();
+        Set<String> roleCodes      = new HashSet<>();
+        Set<String> permissions    = new HashSet<>();
         Set<String> allowedSystems = new HashSet<>();
+
+        // ── Acumular logFilters: UNIÓN de todos los roles del usuario ─────────
+        // Si el usuario tiene VIEWER + otro rol sin filtros, hereda la libertad
+        // del rol sin filtros. Si todos sus roles tienen filtros, ve la unión.
+        Set<String> mergedOutcomes    = new HashSet<>();
+        Set<String> mergedStatuses    = new HashSet<>();
+        Set<String> mergedSeverities  = new HashSet<>();
+        Set<String> mergedEventTypes  = new HashSet<>();
+        boolean hasUnrestrictedRole   = false;   // si algún rol no tiene filtros → sin restricción
 
         for (UserRole ur : links) {
             Role role = roleById.get(ur.getRoleId());
@@ -85,40 +93,78 @@ public class AuthorizationContextService {
                 }
             }
 
-            // systems solo si el rol es systemScoped
-            if (role.isSystemScoped() && ur.getAllowedSystems() != null) {
-                ur.getAllowedSystems().stream()
+            // ── Systems: prioridad a los sistemas específicos del UserRole ────
+            // Si el UserRole tiene allowedSystems definidos, úsalos aunque el
+            // rol sea orgWide (el superAdmin los asignó explícitamente al invitar)
+            Set<String> urSystems = ur.getAllowedSystems();
+            boolean urHasSystems  = urSystems != null && !urSystems.isEmpty();
+
+            if (urHasSystems) {
+                // Sistemas específicos del invite → siempre tienen prioridad
+                urSystems.stream()
+                        .filter(Objects::nonNull)
+                        .map(String::trim)
+                        .filter(s -> !s.isBlank())
+                        .map(String::toUpperCase)
+                        .forEach(allowedSystems::add);
+            } else if (role.isSystemScoped() && urSystems != null) {
+                urSystems.stream()
                         .filter(Objects::nonNull)
                         .map(String::trim)
                         .filter(s -> !s.isBlank())
                         .map(String::toUpperCase)
                         .forEach(allowedSystems::add);
             }
+
+            // ── Merge de logFilters ───────────────────────────────────────────
+            UserRole.LogFilter lf = ur.getLogFilters();
+            if (lf == null || lf.isEmpty()) {
+                // Este rol no tiene restricciones → el usuario ve todo
+                hasUnrestrictedRole = true;
+            } else {
+                if (lf.getAllowedOutcomes()    != null) mergedOutcomes.addAll(lf.getAllowedOutcomes());
+                if (lf.getAllowedStatuses()    != null) mergedStatuses.addAll(lf.getAllowedStatuses());
+                if (lf.getAllowedSeverities()  != null) mergedSeverities.addAll(lf.getAllowedSeverities());
+                if (lf.getAllowedEventTypes()  != null) mergedEventTypes.addAll(lf.getAllowedEventTypes());
+            }
         }
 
-        // CAMBIO: si orgWide, devolvemos TODOS los systems del tenant
-        if (orgWide) {
-            allowedSystems.clear();
+        // Si tiene algún rol sin restricciones → logFilters vacío (ve todo)
+        UserRole.LogFilter mergedFilters;
+        if (hasUnrestrictedRole) {
+            mergedFilters = new UserRole.LogFilter();
+        } else {
+            mergedFilters = UserRole.LogFilter.builder()
+                    .allowedOutcomes(mergedOutcomes)
+                    .allowedStatuses(mergedStatuses)
+                    .allowedSeverities(mergedSeverities)
+                    .allowedEventTypes(mergedEventTypes)
+                    .build();
+        }
 
+        // Solo expandir a todos los sistemas si es orgWide Y ningún UserRole
+        // tiene sistemas específicos asignados (caso: VIEWER con systems restringidos)
+        boolean hasSpecificSystems = !allowedSystems.isEmpty();
+
+        if (orgWide && !hasSpecificSystems) {
+            // orgWide sin restricción → cargar todos los sistemas del tenant
             Query q = new Query();
             q.addCriteria(Criteria.where("tenant_id").is(tenantId));
-            // opcional: si quieres solo systems con logs activos/no borrados, etc.
-
             List<String> systems = mongoTemplate.findDistinct(q, "system", "log_events", String.class);
-
             systems.stream()
                     .filter(StringUtils::hasText)
                     .map(String::trim)
                     .map(String::toUpperCase)
                     .forEach(allowedSystems::add);
         }
-
+        // Si orgWide=true pero hasSpecificSystems=true → respetar los systems del invite
 
         return AuthorizationContext.builder()
                 .roles(roleCodes)
                 .permissions(permissions)
                 .allowedSystems(allowedSystems)
                 .orgWide(orgWide)
+                .logFilters(mergedFilters)
                 .build();
     }
 }

@@ -30,34 +30,44 @@ import java.util.*;
 public class InviteServices {
 
     private final UserInviteRepository invites;
-    private final UserRepository users;
-    private final RoleRepository roles;
-    private final UserRoleRepository userRoles;
-    private final PasswordEncoder encoder;
-    private final JwtTokenService tokens;
-
+    private final UserRepository       users;
+    private final RoleRepository       roles;
+    private final UserRoleRepository   userRoles;
+    private final PasswordEncoder      encoder;
+    private final JwtTokenService      tokens;
     private final AuthorizationContextService authz;
 
     @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
     private String frontendBaseUrl;
 
-    // Se esta creando una invitacion PENDING
+    // ── Crear invitación PENDING ───────────────────────────────────────────────
+
     public UserInvite create(ObjectId tenantId,
                              String email,
                              List<String> roleCodes,
                              List<String> systems,
                              Duration ttl) {
+        return create(tenantId, email, roleCodes, systems, ttl, null);
+    }
 
-        if (tenantId == null) {
+    /**
+     * Sobrecarga que acepta logFilters — usar esta cuando el superAdmin
+     * quiere restringir la visibilidad de logs del VIEWER invitado.
+     */
+    public UserInvite create(ObjectId tenantId,
+                             String email,
+                             List<String> roleCodes,
+                             List<String> systems,
+                             Duration ttl,
+                             UserRole.LogFilter logFilters) {
+
+        if (tenantId == null)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenant_required");
-        }
-
-        if (!StringUtils.hasText(email)) {
+        if (!StringUtils.hasText(email))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "email_required");
-        }
 
         String emailNorm = email.trim();
-        String emailCi = emailNorm.toLowerCase(Locale.ROOT);
+        String emailCi   = emailNorm.toLowerCase(Locale.ROOT);
 
         users.findByTenantIdAndEmailIgnoreCase(tenantId, emailNorm)
                 .ifPresent(u -> { throw new ResponseStatusException(HttpStatus.CONFLICT, "user_exists"); });
@@ -65,41 +75,38 @@ public class InviteServices {
         invites.findFirstByTenantIdAndEmailCiAndStatus(tenantId, emailCi, "PENDING")
                 .ifPresent(i -> { throw new ResponseStatusException(HttpStatus.CONFLICT, "invite_already_sent"); });
 
-        // EXACTAMENTE 1 ROL
-        RoleCode role = parseSingleRole(roleCodes);
-        List<String> safeRoles = List.of(role.name()); // garantizado 1 solo rol
+        RoleCode role     = parseSingleRole(roleCodes);
+        List<String> safeRoles = List.of(role.name());
 
-        // SYSTEMS dinámicos: solo normalizamos (NO validamos existencia)
+        // ── FIX 1: systems se respetan para TODOS los roles ───────────────────
         List<String> safeSystems = normalizeSystems(systems);
 
-        // SYSTEM_MANAGER requiere >= 1 system
-        if (role == RoleCode.SYSTEM_MANAGER) {
-            if (safeSystems.isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "systems_required_for_system_manager");
-            }
-        } else {
-            // Recomendado: para otros roles, ignorar systems
-            safeSystems = List.of();
+        // SYSTEM_MANAGER REQUIERE al menos 1 system
+        if (role == RoleCode.SYSTEM_MANAGER && safeSystems.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "systems_required_for_system_manager");
         }
+        // VIEWER y otros roles: se guardan los systems que vengan (puede ser vacío = todos)
+        // NO se borran
 
-        // 4) TTL
+        // ── TTL ───────────────────────────────────────────────────────────────
         Duration effectiveTtl = (ttl == null) ? Duration.ofHours(48) : ttl;
-        if (effectiveTtl.isZero() || effectiveTtl.isNegative()) {
+        if (effectiveTtl.isZero() || effectiveTtl.isNegative())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ttl_invalid");
-        }
-        if (effectiveTtl.compareTo(Duration.ofDays(30)) > 0) {
+        if (effectiveTtl.compareTo(Duration.ofDays(30)) > 0)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ttl_too_large");
-        }
 
         String token = randomToken();
-        Instant now = Instant.now();
+        Instant now  = Instant.now();
 
+        // ── FIX 2: logFilters se guarda en el UserInvite ──────────────────────
         var inv = UserInvite.builder()
                 .tenantId(tenantId)
                 .email(emailNorm)
                 .emailCi(emailCi)
                 .roles(safeRoles)
                 .systems(safeSystems)
+                .logFilters(logFilters)     // ← nuevo campo
                 .token(token)
                 .expiresAt(now.plus(effectiveTtl))
                 .status("PENDING")
@@ -110,95 +117,34 @@ public class InviteServices {
         UserInvite saved = invites.save(inv);
 
         String inviteLink = buildInviteLink(saved);
-        log.info("[INVITE] Invitación creada email={} tenant={} roles={} systems={} token={} link={}",
-                emailCi, tenantId.toHexString(), safeRoles, safeSystems, token, inviteLink);
+        log.info("[INVITE] email={} tenant={} roles={} systems={} logFilters={} token={} link={}",
+                emailCi, tenantId.toHexString(), safeRoles, safeSystems,
+                logFilters != null ? "present" : "none", token, inviteLink);
 
         return saved;
     }
 
-    private RoleCode parseSingleRole(List<String> roleCodes) {
-        if (roleCodes == null || roleCodes.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_required");
-        }
+    // ── Aceptar invitación ────────────────────────────────────────────────────
 
-        // limpia blanks
-        List<String> cleaned = roleCodes.stream()
-                .filter(StringUtils::hasText)
-                .map(r -> r.trim().toUpperCase(Locale.ROOT))
-                .distinct()
-                .toList();
-
-        if (cleaned.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_required");
-        }
-
-        if (cleaned.size() != 1) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "only_one_role_allowed");
-        }
-
-        try {
-            return RoleCode.valueOf(cleaned.get(0));
-        } catch (IllegalArgumentException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_invalid");
-        }
-    }
-
-    private List<String> normalizeSystems(List<String> systems) {
-        if (systems == null) return List.of();
-
-        return systems.stream()
-                .filter(StringUtils::hasText)
-                .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .distinct()
-                .map(s -> {
-                    // Validación mínima de “systemCode” (ajústala a tu estándar)
-                    if (!s.matches("^[A-Z0-9][A-Z0-9_\\-]{0,99}$")) {
-                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system_code_invalid");
-                    }
-                    return s;
-                })
-                .toList();
-    }
-
-    // Se contruye el link completo
-    public String buildInviteLink(UserInvite invite) {
-        if (invite == null || !StringUtils.hasText(invite.getToken())) {
-            return null;
-        }
-
-        return frontendBaseUrl + "/accept-invite?token=" + invite.getToken();
-    }
-
-    // Acepta invitacion pendiente
     @Transactional
     public Map<String, Object> accept(String token, String name, String password) {
 
-        if (!StringUtils.hasText(token)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "token_required");
-        }
-        if (!StringUtils.hasText(name)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name_required");
-        }
-        if (!StringUtils.hasText(password)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "password_required");
-        }
+        if (!StringUtils.hasText(token))    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "token_required");
+        if (!StringUtils.hasText(name))     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name_required");
+        if (!StringUtils.hasText(password)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "password_required");
 
         var inv = invites.findByTokenAndStatus(token, "PENDING")
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "invite_not_found"));
 
         if (Instant.now().isAfter(inv.getExpiresAt())) {
-
-            // Se puede borrar/archivar la invitacion
             inv.setStatus("EXPIRED");
             inv.setUpdateAt(Instant.now());
             invites.save(inv);
-
-            throw new ResponseStatusException(HttpStatus.GONE, "invite_experid");
+            throw new ResponseStatusException(HttpStatus.GONE, "invite_expired");
         }
 
         ObjectId tenantId = inv.getTenantId();
 
-        // Crear o recuperar usuarios de la misma organization
         User user = users.findByTenantIdAndEmailIgnoreCase(tenantId, inv.getEmail())
                 .orElseGet(() -> {
                     var u = new User();
@@ -212,79 +158,135 @@ public class InviteServices {
                     return users.insert(u);
                 });
 
-        List<RoleCode> codes = Optional.ofNullable(inv.getRoles())
-                .orElseGet(List::of)
+        List<RoleCode> codes = Optional.ofNullable(inv.getRoles()).orElseGet(List::of)
                 .stream()
                 .filter(StringUtils::hasText)
                 .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .map(RoleCode::valueOf)   // <-- convierte a enum
+                .map(RoleCode::valueOf)
                 .distinct()
                 .toList();
 
         List<Role> rs = roles.findByTenantIdAndCodeIn(tenantId, codes);
-
         if (rs.isEmpty()) {
             rs = roles.findByTenantIdAndCodeIn(tenantId, List.of(RoleCode.VIEWER));
         }
 
-        // systems que vienen en la invitación
-        List<String> invSystems = Optional.ofNullable(inv.getSystems())
-                .orElseGet(List::of)
+        List<String> invSystems = Optional.ofNullable(inv.getSystems()).orElseGet(List::of)
                 .stream()
                 .filter(StringUtils::hasText)
                 .map(s -> s.trim().toUpperCase(Locale.ROOT))
                 .distinct()
                 .toList();
 
-        // si alguno de los roles es orgWide => systems no aplican
         boolean orgWide = rs.stream().anyMatch(Role::isOrgWide);
-        List<String> finalSystems = orgWide ? List.of() : invSystems;
+
+        // ── FIX: si el invite tiene systems específicos, tienen prioridad ─────
+        // El superAdmin eligió restringir a TRUSTVALUE → ignorar orgWide del rol
+        boolean hasInviteSystems = !invSystems.isEmpty();
+        List<String> finalSystems = hasInviteSystems
+                ? invSystems           // sistemas específicos del invite → prioridad
+                : (orgWide ? List.of() : invSystems);  // comportamiento original
+
+        // ── FIX 2 (cont.): logFilters se copia del invite al UserRole ─────────
+        UserRole.LogFilter logFilters = inv.getLogFilters();
 
         for (Role r : rs) {
-            boolean exists = userRoles.existsByTenantIdAndUserIdAndRoleId(tenantId, user.getId(), r.getId());
+            boolean exists = userRoles.existsByTenantIdAndUserIdAndRoleId(
+                    tenantId, user.getId(), r.getId());
             if (!exists) {
                 var link = new UserRole();
                 link.setTenantId(tenantId);
                 link.setUserId(user.getId());
                 link.setRoleId(r.getId());
-                if (r.isSystemScoped()) {
-                    link.setAllowedSystems(new HashSet<>(finalSystems)); // ya normalizado y vacío si orgWide
-                }
                 link.setCreatedAt(Instant.now());
                 link.setUpdatedAt(Instant.now());
+
+                // Systems: respetar lo que viene de la invitación
+                if (r.isSystemScoped() || hasInviteSystems) {
+                    link.setAllowedSystems(new HashSet<>(finalSystems));
+                }
+
+                // LogFilters: solo aplicar si hay filtros y no es orgWide sin restricción
+                if (!finalSystems.isEmpty() || !orgWide) {
+                    if (logFilters != null && !logFilters.isEmpty()) {
+                        link.setLogFilters(logFilters);
+                    }
+                }
+
                 userRoles.save(link);
             }
         }
 
-        // Se marca la invitacion como aceptada
         inv.setStatus("ACCEPTED");
         inv.setAcceptedBy(user.getId());
         inv.setUpdateAt(Instant.now());
         invites.save(inv);
 
         AuthorizationContext ctx = authz.build(tenantId, user.getId());
-        String access = tokens.generateAccess(user, tenantId, ctx);
-        String refresh = tokens.generateRefresh(user, tenantId, ctx); // si lo tienes
+        String access  = tokens.generateAccess(user, tenantId, ctx);
+        String refresh = tokens.generateRefresh(user, tenantId, ctx);
 
         return Map.of(
-                "accessToken", access,
+                "accessToken",  access,
                 "refreshToken", refresh,
-                "tokenType", "Bearer",
+                "tokenType",    "Bearer",
                 "user", Map.of(
-                        "id", user.getId().toHexString(),
+                        "id",    user.getId().toHexString(),
                         "email", user.getEmail(),
-                        "name", user.getName()
+                        "name",  user.getName()
                 ),
                 "authz", Map.of(
-                        "roles", ctx.getRoles(),
+                        "roles",       ctx.getRoles(),
                         "permissions", ctx.getPermissions(),
-                        "orgWide", ctx.isOrgWide(),
-                        "systems", ctx.getAllowedSystems(),
-                        "ver", 1
+                        "orgWide",     ctx.isOrgWide(),
+                        "systems",     ctx.getAllowedSystems(),
+                        "ver",         1
                 ),
                 "tenantId", tenantId.toHexString()
         );
+    }
 
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    public String buildInviteLink(UserInvite invite) {
+        if (invite == null || !StringUtils.hasText(invite.getToken())) return null;
+        return frontendBaseUrl + "/accept-invite?token=" + invite.getToken();
+    }
+
+    private RoleCode parseSingleRole(List<String> roleCodes) {
+        if (roleCodes == null || roleCodes.isEmpty())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_required");
+
+        List<String> cleaned = roleCodes.stream()
+                .filter(StringUtils::hasText)
+                .map(r -> r.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .toList();
+
+        if (cleaned.isEmpty())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_required");
+        if (cleaned.size() != 1)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "only_one_role_allowed");
+
+        try {
+            return RoleCode.valueOf(cleaned.get(0));
+        } catch (IllegalArgumentException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role_invalid");
+        }
+    }
+
+    private List<String> normalizeSystems(List<String> systems) {
+        if (systems == null) return List.of();
+        return systems.stream()
+                .filter(StringUtils::hasText)
+                .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .map(s -> {
+                    if (!s.matches("^[A-Z0-9][A-Z0-9_\\-]{0,99}$"))
+                        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system_code_invalid");
+                    return s;
+                })
+                .toList();
     }
 
     private String randomToken() {
@@ -292,5 +294,4 @@ public class InviteServices {
         new SecureRandom().nextBytes(b);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
     }
-
 }

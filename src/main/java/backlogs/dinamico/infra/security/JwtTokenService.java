@@ -1,6 +1,7 @@
 package backlogs.dinamico.infra.security;
 
 import backlogs.dinamico.model.core.User;
+import backlogs.dinamico.model.core.UserRole;
 import backlogs.dinamico.security.auth.AuthorizationContext;
 import backlogs.dinamico.security.auth.AuthorizationContextService;
 import io.jsonwebtoken.Claims;
@@ -47,6 +48,11 @@ public class JwtTokenService {
     private static final String CLAIM_ORG_WIDE = "orgWide";
     private static final String CLAIM_SYSTEMS = "systems";
     private static final String CLAIM_VER = "ver";
+
+    private static final String CLAIM_LOG_FILTER_OUTCOMES    = "lfOutcomes";
+    private static final String CLAIM_LOG_FILTER_STATUSES    = "lfStatuses";
+    private static final String CLAIM_LOG_FILTER_SEVERITIES  = "lfSeverities";
+    private static final String CLAIM_LOG_FILTER_EVENT_TYPES = "lfEventTypes";
 
     @Value("${security.jwt.secret}")
     private String secret;
@@ -110,6 +116,18 @@ public class JwtTokenService {
         boolean orgWide = ctx != null && ctx.isOrgWide();
         List<String> systems = (ctx == null || ctx.getAllowedSystems() == null) ? List.of() : ctx.getAllowedSystems().stream().sorted().toList();
 
+        // ── Log filters ──────────────────────────────────────────────────────────
+        UserRole.LogFilter lf = (ctx != null && ctx.getLogFilters() != null)
+                ? ctx.getLogFilters()
+                : new UserRole.LogFilter();
+
+        List<String> lfOutcomes    = lf.getAllowedOutcomes()   == null ? List.of() : lf.getAllowedOutcomes().stream().sorted().toList();
+        List<String> lfStatuses    = lf.getAllowedStatuses()   == null ? List.of() : lf.getAllowedStatuses().stream().sorted().toList();
+        List<String> lfSeverities  = lf.getAllowedSeverities() == null ? List.of() : lf.getAllowedSeverities().stream().sorted().toList();
+        List<String> lfEventTypes  = lf.getAllowedEventTypes() == null ? List.of() : lf.getAllowedEventTypes().stream().sorted().toList();
+
+        // En el builder, agregar:
+
         return Jwts.builder()
                 .setIssuer(issuer)
                 .setSubject(user.getEmail())
@@ -126,6 +144,10 @@ public class JwtTokenService {
                 .claim(CLAIM_ORG_WIDE, orgWide)
                 .claim(CLAIM_SYSTEMS, systems) // vacío si orgWide=true
                 .claim(CLAIM_VER, 1)
+                .claim(CLAIM_LOG_FILTER_OUTCOMES,    lfOutcomes)
+                .claim(CLAIM_LOG_FILTER_STATUSES,    lfStatuses)
+                .claim(CLAIM_LOG_FILTER_SEVERITIES,  lfSeverities)
+                .claim(CLAIM_LOG_FILTER_EVENT_TYPES, lfEventTypes)
                 .signWith(SignatureAlgorithm.HS256, key)
                 .compact();
     }

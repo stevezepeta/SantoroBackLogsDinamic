@@ -3,6 +3,7 @@ package backlogs.dinamico.service.logs;
 import backlogs.dinamico.api.dto.logs.LogEventIngestReq;
 import backlogs.dinamico.api.dto.logs.LogTimelineResponse;
 import backlogs.dinamico.infra.security.AuthUser;
+import backlogs.dinamico.infra.security.LogFilterCriteria;
 import backlogs.dinamico.model.log.LogEvent;
 import backlogs.dinamico.repository.log.LogEventRepository;
 import backlogs.dinamico.security.auth.ScopeGuard;
@@ -33,7 +34,8 @@ public class LogEventService {
     private final MongoTemplate mongoTemplate;
     private final ScopeGuard scopeGuard;
 
-    //  ---------------- ALL LOG'S -----------------
+    // ── ALL ───────────────────────────────────────────────────────────────────
+
     public Page<LogEvent> all(
             Authentication auth,
             Instant from,
@@ -44,30 +46,34 @@ public class LogEventService {
             String sortDir
     ) {
         ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) {
+        if (tenantId == null)
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
-        }
 
         AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
-        if (user == null) {
+        if (user == null)
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unauthenticated");
-        }
 
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
 
-        // SCOPE: todos los systems visibles
+        // SCOPE: systems visibles
         if (!user.isOrgWide()) {
-            var allowed = (user.getAllowedSystems() == null) ? List.<String>of() :
-                    user.getAllowedSystems().stream()
-                            .filter(StringUtils::hasText)
-                            .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                            .distinct()
-                            .toList();
+            var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
+                    : user.getAllowedSystems().stream()
+                    .filter(StringUtils::hasText)
+                    .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
 
-            if (allowed.isEmpty()) {
-                return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
-            }
+            if (allowed.isEmpty()) return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
+            cs.add(Criteria.where("system").in(allowed));
+        } else if (user.getAllowedSystems() != null && !user.getAllowedSystems().isEmpty()) {
+            // orgWide=true pero con systems específicos del invite → respetar restricción
+            var allowed = user.getAllowedSystems().stream()
+                    .filter(StringUtils::hasText)
+                    .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
             cs.add(Criteria.where("system").in(allowed));
         }
 
@@ -75,11 +81,15 @@ public class LogEventService {
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to); // exclusivo
+            if (to != null)   time = time.lt(to);
             cs.add(time);
         }
 
         Criteria finalC = new Criteria().andOperator(cs.toArray(new Criteria[0]));
+
+        // ── APLICAR logFilters del VIEWER (outcome, status, severity, eventType)
+        finalC = LogFilterCriteria.apply(finalC);
+
         Query q = new Query(finalC);
 
         Sort.Direction dir = "ASC".equalsIgnoreCase(sortDir) ? Sort.Direction.ASC : Sort.Direction.DESC;
@@ -94,125 +104,8 @@ public class LogEventService {
         return new PageImpl<>(items, pageable, total);
     }
 
-    // ---------- INGEST (SOLO API KEY) ----------
-    public LogEvent ingest(LogEventIngestReq req) {
+    // ── SEARCH ────────────────────────────────────────────────────────────────
 
-        // Body obligatorio
-        if (req == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body_required");
-        }
-
-        // Tenant obligatorio (lo setea ApiKeyTenantFilter)
-        ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
-        }
-
-        //    - Si llega header X-Tenant solamente (TenantResolutionFilter) => unauthorized
-        if (!TenantContext.isApiKey()) {
-            // Diferenciamos mensajes para debug
-            if (TenantContext.isJwt() || TenantContext.get().getUserId() != null) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "human_jwt_cannot_ingest_logs");
-            }
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "api_key_required_for_ingest");
-        }
-
-        // 4) Validaciones normales
-        validateGeo(req.geo());
-
-        String system = normalizeUpper(req.system());
-        if (!StringUtils.hasText(system)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system is required");
-        }
-
-        String env    = normalize(req.environment()); // puede ser null
-        String caseId = normalize(req.caseId());
-        Instant eventTime = (req.eventTime() != null) ? req.eventTime() : Instant.now();
-
-        // ----------------- NORMALIZACION CLAVE -------------------
-        String severityRaw = normalizeUpper(req.severity());
-        String severityNorm = LogNormalizationUtils.normalizeSeverity(severityRaw);
-
-        String statusNorm = normalizeUpper(req.status());
-        String outcomeNorm = normalizeUpper(req.outcome());
-
-        // messageKey
-        String msgNorm = normalize(req.message());
-        String reasonDesc = (req.reason() != null) ? normalize(req.reason().description()) : null;
-        String messageKey = LogNormalizationUtils.buildMessageKey(msgNorm, reasonDesc);
-
-        // isError real
-        boolean isError = LogNormalizationUtils.computeIsError(severityNorm, statusNorm, outcomeNorm);
-
-        LogEvent event = LogEvent.builder()
-                .tenantId(tenantId)
-                .schemaVersion(req.schemaVersion() == null ? 1 : req.schemaVersion())
-                .system(system)
-                .environment(env)
-                .caseId(caseId)
-                .eventTime(eventTime)
-                .eventType(normalizeUpper(req.eventType()))
-                .status(statusNorm)
-                .outcome(outcomeNorm)
-                .severity(severityNorm)
-                .severity(severityRaw)
-                .message(msgNorm)
-                .messageKey(messageKey)
-                .isError(isError)
-                .geo(mapGeo(req.geo()))
-                .actor(req.actor() == null ? null :
-                        new LogEvent.Actor(
-                                normalize(req.actor().id()),
-                                normalizeUpper(req.actor().type()),
-                                normalize(req.actor().username()),
-                                normalize(req.actor().fullName())
-                        ))
-                .location(req.location() == null ? null :
-                        new LogEvent.Location(
-                                normalize(req.location().id()),
-                                normalize(req.location().name()),
-                                normalize(req.location().city()),
-                                normalizeUpper(req.location().country())
-                        ))
-                .correlation(req.correlation() == null ? null :
-                        new LogEvent.Correlation(
-                                normalize(req.correlation().requestId()),
-                                normalize(req.correlation().traceId()),
-                                normalize(req.correlation().spanId())
-                        ))
-                .http(req.http() == null ? null :
-                        new LogEvent.HttpInfo(
-                                normalizeUpper(req.http().method()),
-                                normalize(req.http().path()),
-                                req.http().statusCode(),
-                                req.http().latencyMs()
-                        ))
-                .sla(req.sla() == null ? null :
-                        new LogEvent.SlaInfo(
-                                req.sla().startTime(),
-                                req.sla().endTime(),
-                                req.sla().elapsedSeconds()
-                        ))
-                .reason(req.reason() == null ? null :
-                        new LogEvent.ReasonInfo(
-                                normalizeUpper(req.reason().code()),
-                                normalize(req.reason().description())
-                        ))
-                .tags(req.tags() == null ? List.of() :
-                        req.tags().stream()
-                                .filter(StringUtils::hasText)
-                                .map(t -> t.trim().toLowerCase(Locale.ROOT))
-                                .distinct()
-                                .toList()
-                )
-                .payload(req.payload())
-                .meta(req.meta())
-                .build();
-
-        return repo.save(event);
-    }
-
-    // -------- SEARCH --------------
     public Page<LogEvent> search(
             Authentication auth,
             String system,
@@ -233,16 +126,13 @@ public class LogEventService {
             String sortDir
     ) {
         ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) {
+        if (tenantId == null)
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
-        }
 
         AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
-        if (user == null) {
+        if (user == null)
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "unauthenticated");
-        }
 
-        // Normaliza system si viene
         system = normalizeUpper(system);
 
         List<Criteria> cs = new ArrayList<>();
@@ -250,47 +140,42 @@ public class LogEventService {
 
         // SCOPE / SYSTEM FILTER
         if (StringUtils.hasText(system)) {
-            // Modo normal: 1 system
             scopeGuard.requireSystemAccess(user, system);
             cs.add(Criteria.where("system").is(system));
-
         } else {
-            // Modo ALL: todos los systems visibles
-            if (user.isOrgWide()) {
-                // orgWide
+            if (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty())) {
+                // orgWide sin restricción → ve todos
             } else {
-                var allowed = (user.getAllowedSystems() == null) ? List.<String>of() :
-                        user.getAllowedSystems().stream()
-                                .filter(StringUtils::hasText)
-                                .map(s -> s.trim().toUpperCase(java.util.Locale.ROOT))
-                                .distinct()
-                                .toList();
+                var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
+                        : user.getAllowedSystems().stream()
+                        .filter(StringUtils::hasText)
+                        .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                        .distinct()
+                        .toList();
 
-                if (allowed.isEmpty()) {
-                    return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
-                }
-
+                if (allowed.isEmpty()) return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
                 cs.add(Criteria.where("system").in(allowed));
             }
         }
 
-        // FILTROS (los de siempre)
+        // FECHAS
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to); // exclusivo
+            if (to != null)   time = time.lt(to);
             cs.add(time);
         }
 
-        if (StringUtils.hasText(caseId)) cs.add(Criteria.where("caseId").is(normalize(caseId)));
-        if (StringUtils.hasText(eventType)) cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
-        if (StringUtils.hasText(status)) cs.add(Criteria.where("status").is(normalizeUpper(status)));
-        if (StringUtils.hasText(outcome)) cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
-        if (StringUtils.hasText(severity)) cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
+        // FILTROS del request (los del usuario pueden quedar anulados por logFilters si se solapan)
+        if (StringUtils.hasText(caseId))     cs.add(Criteria.where("caseId").is(normalize(caseId)));
+        if (StringUtils.hasText(eventType))  cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
+        if (StringUtils.hasText(status))     cs.add(Criteria.where("status").is(normalizeUpper(status)));
+        if (StringUtils.hasText(outcome))    cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
+        if (StringUtils.hasText(severity))   cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
 
-        if (StringUtils.hasText(actorId)) cs.add(Criteria.where("actor.id").is(normalize(actorId)));
+        if (StringUtils.hasText(actorId))    cs.add(Criteria.where("actor.id").is(normalize(actorId)));
         if (StringUtils.hasText(locationId)) cs.add(Criteria.where("location.id").is(normalize(locationId)));
-        if (StringUtils.hasText(requestId)) cs.add(Criteria.where("correlation.requestId").is(normalize(requestId)));
+        if (StringUtils.hasText(requestId))  cs.add(Criteria.where("correlation.requestId").is(normalize(requestId)));
 
         if (StringUtils.hasText(text)) {
             Pattern p = Pattern.compile(".*" + Pattern.quote(text.trim()) + ".*", Pattern.CASE_INSENSITIVE);
@@ -301,6 +186,10 @@ public class LogEventService {
         }
 
         Criteria finalC = new Criteria().andOperator(cs.toArray(new Criteria[0]));
+
+        // ── APLICAR logFilters del VIEWER (outcome, status, severity, eventType)
+        finalC = LogFilterCriteria.apply(finalC);
+
         Query q = new Query(finalC);
 
         Sort.Direction dir = "ASC".equalsIgnoreCase(sortDir) ? Sort.Direction.ASC : Sort.Direction.DESC;
@@ -315,10 +204,12 @@ public class LogEventService {
         return new PageImpl<>(items, pageable, total);
     }
 
-    // ---------- DETAIL ----------
+    // ── DETAIL ────────────────────────────────────────────────────────────────
+
     public LogEvent getById(Authentication auth, ObjectId id) {
         ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+        if (tenantId == null)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
         LogEvent ev = repo.findByIdAndTenantId(id, tenantId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "log_not_found"));
@@ -329,7 +220,8 @@ public class LogEventService {
         return ev;
     }
 
-    // ---------- TIMELINE ----------
+    // ── TIMELINE ──────────────────────────────────────────────────────────────
+
     public LogTimelineResponse timeline(
             Authentication auth,
             String system,
@@ -340,7 +232,8 @@ public class LogEventService {
             int size
     ) {
         ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+        if (tenantId == null)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
         AuthUser user = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
         scopeGuard.requireSystemAccess(user, system);
@@ -348,14 +241,12 @@ public class LogEventService {
         system = normalizeUpper(system);
         caseId = normalize(caseId);
 
-        if (!StringUtils.hasText(system) || !StringUtils.hasText(caseId)) {
+        if (!StringUtils.hasText(system) || !StringUtils.hasText(caseId))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system and caseId are required");
-        }
 
         if (page < 0) page = 0;
         if (size < 1) size = 1;
-        int maxSize = 500;
-        if (size > maxSize) size = maxSize;
+        if (size > 500) size = 500;
 
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
@@ -365,16 +256,21 @@ public class LogEventService {
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to);
+            if (to != null)   time = time.lt(to);
             cs.add(time);
         }
 
-        Query q = new Query(new Criteria().andOperator(cs.toArray(new Criteria[0])))
+        Criteria finalC = new Criteria().andOperator(cs.toArray(new Criteria[0]));
+
+        // ── APLICAR logFilters también en timeline
+        finalC = LogFilterCriteria.apply(finalC);
+
+        Query q = new Query(finalC)
                 .with(Sort.by(Sort.Direction.ASC, "eventTime"))
                 .skip((long) page * size)
                 .limit(size + 1);
 
-        List<LogEvent> eventsPlus  = mongoTemplate.find(q, LogEvent.class, COLLECTION);
+        List<LogEvent> eventsPlus = mongoTemplate.find(q, LogEvent.class, COLLECTION);
 
         boolean hasNext = eventsPlus.size() > size;
         List<LogEvent> events = hasNext ? eventsPlus.subList(0, size) : eventsPlus;
@@ -390,26 +286,123 @@ public class LogEventService {
                         ev.getOutcome(),
                         ev.getSeverity(),
                         ev.getMessage(),
-                        ev.getActor() != null ? ev.getActor().getId() : null,
-                        ev.getActor() != null ? ev.getActor().getUsername() : null,
-                        ev.getActor() != null ? ev.getActor().getFullName() : null,
-                        ev.getLocation() != null ? ev.getLocation().getId() : null,
-                        ev.getLocation() != null ? ev.getLocation().getName() : null,
-                        ev.getCorrelation() != null ? ev.getCorrelation().getRequestId() : null,
-                        ev.getGeo() != null ? ev.getGeo().getCoordinates() : null,
-                        ev.getGeo() != null ? ev.getGeo().getAccuracyMeters() : null
+                        ev.getActor()       != null ? ev.getActor().getId()                  : null,
+                        ev.getActor()       != null ? ev.getActor().getUsername()             : null,
+                        ev.getActor()       != null ? ev.getActor().getFullName()             : null,
+                        ev.getLocation()    != null ? ev.getLocation().getId()                : null,
+                        ev.getLocation()    != null ? ev.getLocation().getName()              : null,
+                        ev.getCorrelation() != null ? ev.getCorrelation().getRequestId()      : null,
+                        ev.getGeo()         != null ? ev.getGeo().getCoordinates()            : null,
+                        ev.getGeo()         != null ? ev.getGeo().getAccuracyMeters()         : null
                 ))
                 .toList();
 
         return LogTimelineResponse.withMeta(header, items, page, size, hasNext);
     }
 
-    // ---------- Helpers ----------
+    // ── INGEST (solo API Key) ─────────────────────────────────────────────────
+
+    public LogEvent ingest(LogEventIngestReq req) {
+        if (req == null)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "body_required");
+
+        ObjectId tenantId = TenantContext.getTenantId();
+        if (tenantId == null)
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
+
+        if (!TenantContext.isApiKey()) {
+            if (TenantContext.isJwt() || TenantContext.get().getUserId() != null)
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN, "human_jwt_cannot_ingest_logs");
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "api_key_required_for_ingest");
+        }
+
+        validateGeo(req.geo());
+
+        String system = normalizeUpper(req.system());
+        if (!StringUtils.hasText(system))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "system is required");
+
+        String env    = normalize(req.environment());
+        String caseId = normalize(req.caseId());
+        Instant eventTime = (req.eventTime() != null) ? req.eventTime() : Instant.now();
+
+        String severityRaw  = normalizeUpper(req.severity());
+        String severityNorm = LogNormalizationUtils.normalizeSeverity(severityRaw);
+        String statusNorm   = normalizeUpper(req.status());
+        String outcomeNorm  = normalizeUpper(req.outcome());
+
+        String msgNorm    = normalize(req.message());
+        String reasonDesc = (req.reason() != null) ? normalize(req.reason().description()) : null;
+        String messageKey = LogNormalizationUtils.buildMessageKey(msgNorm, reasonDesc);
+        boolean isError   = LogNormalizationUtils.computeIsError(severityNorm, statusNorm, outcomeNorm);
+
+        LogEvent event = LogEvent.builder()
+                .tenantId(tenantId)
+                .schemaVersion(req.schemaVersion() == null ? 1 : req.schemaVersion())
+                .system(system)
+                .environment(env)
+                .caseId(caseId)
+                .eventTime(eventTime)
+                .eventType(normalizeUpper(req.eventType()))
+                .status(statusNorm)
+                .outcome(outcomeNorm)
+                .severity(severityNorm)
+                .message(msgNorm)
+                .messageKey(messageKey)
+                .isError(isError)
+                .geo(mapGeo(req.geo()))
+                .actor(req.actor() == null ? null : new LogEvent.Actor(
+                        normalize(req.actor().id()),
+                        normalizeUpper(req.actor().type()),
+                        normalize(req.actor().username()),
+                        normalize(req.actor().fullName())
+                ))
+                .location(req.location() == null ? null : new LogEvent.Location(
+                        normalize(req.location().id()),
+                        normalize(req.location().name()),
+                        normalize(req.location().city()),
+                        normalizeUpper(req.location().country())
+                ))
+                .correlation(req.correlation() == null ? null : new LogEvent.Correlation(
+                        normalize(req.correlation().requestId()),
+                        normalize(req.correlation().traceId()),
+                        normalize(req.correlation().spanId())
+                ))
+                .http(req.http() == null ? null : new LogEvent.HttpInfo(
+                        normalizeUpper(req.http().method()),
+                        normalize(req.http().path()),
+                        req.http().statusCode(),
+                        req.http().latencyMs()
+                ))
+                .sla(req.sla() == null ? null : new LogEvent.SlaInfo(
+                        req.sla().startTime(),
+                        req.sla().endTime(),
+                        req.sla().elapsedSeconds()
+                ))
+                .reason(req.reason() == null ? null : new LogEvent.ReasonInfo(
+                        normalizeUpper(req.reason().code()),
+                        normalize(req.reason().description())
+                ))
+                .tags(req.tags() == null ? List.of() :
+                        req.tags().stream()
+                                .filter(StringUtils::hasText)
+                                .map(t -> t.trim().toLowerCase(Locale.ROOT))
+                                .distinct()
+                                .toList()
+                )
+                .payload(req.payload())
+                .meta(req.meta())
+                .build();
+
+        return repo.save(event);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
     private static String normalize(String v) {
         if (v == null) return null;
         v = v.trim();
-        if (v.isEmpty()) return null;
-        if ("null".equalsIgnoreCase(v)) return null;
+        if (v.isEmpty() || "null".equalsIgnoreCase(v)) return null;
         return v;
     }
 
@@ -430,17 +423,12 @@ public class LogEventService {
     private void validateGeo(LogEventIngestReq.GeoPoint geo) {
         if (geo == null) return;
         List<Double> c = geo.coordinates();
-        if (c == null || c.size() != 2) {
+        if (c == null || c.size() != 2)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "geo.coordinates debe ser [lon, lat]");
-        }
-        Double lon = c.get(0);
-        Double lat = c.get(1);
-
-        if (lon == null || lat == null) {
+        Double lon = c.get(0), lat = c.get(1);
+        if (lon == null || lat == null)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "geo.coordinates contiene null");
-        }
-        if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+        if (lon < -180 || lon > 180 || lat < -90 || lat > 90)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "geo.coordinates fuera de rango válido");
-        }
     }
 }

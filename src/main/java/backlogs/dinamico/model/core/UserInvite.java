@@ -1,5 +1,6 @@
 package backlogs.dinamico.model.core;
 
+import backlogs.dinamico.model.core.UserRole;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -37,8 +38,15 @@ public class UserInvite {
 
     private List<String> roles;
 
-    @Field("systems")          // NUEVO
+    @Field("systems")
     private List<String> systems;
+
+    /**
+     * Filtros de visibilidad de logs asignados al invitado.
+     * Se persisten aquí y se copian al UserRole cuando se acepta la invitación.
+     */
+    @Field("log_filters")
+    private UserRole.LogFilter logFilters;
 
     private String token;
     private Instant expiresAt;

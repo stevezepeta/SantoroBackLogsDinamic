@@ -1,5 +1,6 @@
 package backlogs.dinamico.infra.security;
 
+import backlogs.dinamico.model.core.UserRole;
 import backlogs.dinamico.tenant.TenantContext;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -22,9 +23,8 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
+import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -32,16 +32,13 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
 
-    // Aceptamos cualquiera de estos nombres de claim para permisos
     private static final String CLAIM_PERMS_PRIMARY = "perms";
     private static final String CLAIM_PERMS_ALT     = "permissions";
-
-    private static final String CLAIM_ORG_WIDE = "orgWide";
-    private static final String CLAIM_SYSTEMS  = "systems";
+    private static final String CLAIM_ORG_WIDE      = "orgWide";
+    private static final String CLAIM_SYSTEMS       = "systems";
 
     private final JwtTokenService tokens;
 
-    // IMPORTANT: ingesta NO debe autenticarse por JWT (solo API KEY)
     private static final RequestMatcher LOG_EVENTS_POST =
             new AntPathRequestMatcher("/api/logs/events/**", "POST");
     private static final RequestMatcher LOGS_POST =
@@ -53,10 +50,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        // OPTIONS bypass
         if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
-
-        // Ingesta: NO procesar JWT aquí (ApiKeyTenantFilter se encarga)
         return LOG_EVENTS_POST.matches(request)
                 || LOGS_POST.matches(request)
                 || INGEST_POST.matches(request)
@@ -83,14 +77,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 return;
             }
 
-            // SOLO ACCESS
             Claims c = tokens.verifyAccess(token);
 
             String email  = c.getSubject();
             String name   = c.get("name", String.class);
             String uidHex = c.get("uid", String.class);
 
-            // tenant / org (varios aliases por compatibilidad)
             String tenantHex = firstNonBlank(
                     c.get("tenantId", String.class),
                     c.get("orgId", String.class),
@@ -110,15 +102,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             ObjectId orgId    = toObjectId(orgHex);
             ObjectId userId   = toObjectId(uidHex);
 
-            // Merge con TenantContext previo (por headers/ApiKey)
             var prev = TenantContext.get();
             if (tenantId == null) tenantId = prev.getTenantId();
-            if (orgId == null) orgId = prev.getOrganizationId();
+            if (orgId == null)    orgId    = prev.getOrganizationId();
 
             if (tenantId == null) throw new JwtException("tenant_not_resolved_in_jwt");
-            if (orgId == null) orgId = tenantId;
+            if (orgId == null)    orgId = tenantId;
 
-            // ---------------- Roles ----------------
+            // ── Roles ─────────────────────────────────────────────────────────
             @SuppressWarnings("unchecked")
             List<Object> rolesRaw = c.get("roles", List.class);
 
@@ -128,7 +119,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .distinct()
                     .toList();
 
-            // ---------------- Permisos ----------------
+            // ── Permisos ──────────────────────────────────────────────────────
             @SuppressWarnings("unchecked")
             List<Object> permsRaw = firstNonNullList(
                     c.get(CLAIM_PERMS_PRIMARY, List.class),
@@ -141,7 +132,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .distinct()
                     .toList();
 
-            // ---------------- Scope (orgWide / systems) ----------------
+            // ── Scope ─────────────────────────────────────────────────────────
             Boolean orgWide = c.get(CLAIM_ORG_WIDE, Boolean.class);
             boolean isOrgWide = orgWide != null && orgWide;
 
@@ -155,8 +146,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
             if (isOrgWide) allowedSystems = List.of();
 
-            // ---------------- TenantContext ----------------
-            // Nota: TenantResolutionFilter limpiará el ThreadLocal al final del request.
+            // ── TenantContext ─────────────────────────────────────────────────
             TenantContext.set(TenantContext.Ctx.builder()
                     .tenantId(tenantId)
                     .organizationId(orgId)
@@ -169,7 +159,29 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     .collectionSuffix(prev.getCollectionSuffix())
                     .build());
 
-            // ---------------- Principal ----------------
+            // ── Log Filters ───────────────────────────────────────────────────
+            @SuppressWarnings("unchecked")
+            List<Object> lfOutcomesRaw   = c.get("lfOutcomes",   List.class);
+            @SuppressWarnings("unchecked")
+            List<Object> lfStatusesRaw   = c.get("lfStatuses",   List.class);
+            @SuppressWarnings("unchecked")
+            List<Object> lfSeveritiesRaw = c.get("lfSeverities", List.class);
+            @SuppressWarnings("unchecked")
+            List<Object> lfEventTypesRaw = c.get("lfEventTypes", List.class);
+
+            UserRole.LogFilter logFilters = UserRole.LogFilter.builder()
+                    .allowedOutcomes(toStringSet(lfOutcomesRaw))
+                    .allowedStatuses(toStringSet(lfStatusesRaw))
+                    .allowedSeverities(toStringSet(lfSeveritiesRaw))
+                    .allowedEventTypes(toStringSet(lfEventTypesRaw))
+                    .build();
+
+            // ── Authorities ───────────────────────────────────────────────────
+            List<GrantedAuthority> authorities = new ArrayList<>(roleCodes.size() + permCodes.size());
+            roleCodes.forEach(r -> authorities.add(new SimpleGrantedAuthority("ROLE_" + r)));
+            permCodes.forEach(p -> authorities.add(new SimpleGrantedAuthority("PERM_" + p)));
+
+            // ── Principal ─────────────────────────────────────────────────────
             AuthUser principal = new AuthUser(
                     userId,
                     email,
@@ -178,24 +190,35 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                     roleCodes,
                     permCodes,
                     isOrgWide,
-                    allowedSystems
+                    allowedSystems,
+                    logFilters,
+                    authorities
             );
 
-            // ---------------- Authorities (SecurityConfig usa PERM_*) ----------------
-            List<GrantedAuthority> authorities = new ArrayList<>(roleCodes.size() + permCodes.size());
-            roleCodes.forEach(r -> authorities.add(new SimpleGrantedAuthority("ROLE_" + r)));
-            permCodes.forEach(p -> authorities.add(new SimpleGrantedAuthority("PERM_" + p)));
-
+            // ── CRÍTICO: setear autenticación ANTES de chain.doFilter() ───────
             var authentication = new UsernamePasswordAuthenticationToken(principal, null, authorities);
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
-            chain.doFilter(request, response);
+            chain.doFilter(request, response);   // ← al final, con auth ya lista
 
         } catch (JwtException | IllegalArgumentException e) {
             SecurityContextHolder.clearContext();
-            log.debug("[JwtAuthFilter] JWT invalid: {}", e.getMessage());
+            log.warn("[JwtAuthFilter] JWT invalid: {} — token: {}", e.getMessage(),
+                    header != null ? header.substring(0, Math.min(header.length(), 30)) : "null");
             chain.doFilter(request, response);
         }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static Set<String> toStringSet(List<Object> raw) {
+        if (raw == null || raw.isEmpty()) return new HashSet<>();
+        return raw.stream()
+                .map(String::valueOf)
+                .map(String::trim)
+                .map(String::toUpperCase)
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toCollection(HashSet::new));
     }
 
     private static ObjectId toObjectId(String hex) {
