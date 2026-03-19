@@ -143,23 +143,20 @@ public class AdminInviteController {
                         "name", "(unknown)"
                 ));
 
-        String inviteLink = invites.buildInviteLink(inv);
-
-        // Incluir logFilters en la respuesta para confirmar que se guardaron
+        // Respuesta limpia — sin inviteToken ni inviteLink (el OTP llega al email)
         Map<String, Object> data = new java.util.LinkedHashMap<>();
         data.put("organization", orgBlock);
         data.put("email",        inv.getEmail());
         data.put("roles",        inv.getRoles());
         data.put("systems",      inv.getSystems());
         data.put("logFilters",   inv.getLogFilters() != null ? Map.of(
-                "allowedOutcomes",    inv.getLogFilters().getAllowedOutcomes(),
-                "allowedStatuses",    inv.getLogFilters().getAllowedStatuses(),
-                "allowedSeverities",  inv.getLogFilters().getAllowedSeverities(),
-                "allowedEventTypes",  inv.getLogFilters().getAllowedEventTypes()
+                "allowedOutcomes",   inv.getLogFilters().getAllowedOutcomes(),
+                "allowedStatuses",   inv.getLogFilters().getAllowedStatuses(),
+                "allowedSeverities", inv.getLogFilters().getAllowedSeverities(),
+                "allowedEventTypes", inv.getLogFilters().getAllowedEventTypes()
         ) : null);
-        data.put("inviteToken",  inv.getToken());
-        data.put("inviteLink",   inviteLink);
         data.put("expiresAt",    inv.getExpiresAt());
+        data.put("message",      "Código de verificación enviado al email del invitado.");
 
         return ApiResponse.created("Invitación generada", "admin_invite_created", data);
     }

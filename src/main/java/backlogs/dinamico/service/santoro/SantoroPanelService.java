@@ -10,6 +10,7 @@ import backlogs.dinamico.model.ingest.ApiKey;
 import backlogs.dinamico.repository.catalog.ApiKeyRep;
 import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.UserRepository;
+import backlogs.dinamico.service.email.EmailValidationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
@@ -45,6 +46,8 @@ public class SantoroPanelService {
     private final UserRepository userRepo;
     private final ApiKeyRep apiKeyRep;
     private final PasswordEncoder passwordEncoder;
+
+    private final EmailValidationService emailValidationService;
 
     // ── Validación de dominio ─────────────────────────────────────────────────
 
@@ -141,6 +144,8 @@ public class SantoroPanelService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "code_already_exists");
         if (orgRepo.findBySlugIgnoreCase(req.getOrgSlug()).isPresent())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "slug_already_exists");
+
+        emailValidationService.consumeToken(req.getVerificationToken(), req.getAdminEmail());
 
         // Crear organización
         Organization org = Organization.builder()

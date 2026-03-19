@@ -41,6 +41,11 @@
 			<artifactId>spring-boot-starter-web</artifactId>
 		</dependency>
 
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-mail</artifactId>
+		</dependency>
+
 		<!-- Si de verdad usas WebSocket, déjalo. Si no, quítalo. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -101,7 +106,7 @@
 			<version>8.10.1</version>
 		</dependency>
 
-		<!-- ✅ JWT moderno (Boot 3 / Jakarta friendly) -->
+		<!-- JWT moderno (Boot 3 / Jakarta friendly) -->
 		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-api</artifactId>
@@ -120,7 +125,7 @@
 			<scope>runtime</scope>
 		</dependency>
 
-		<!-- ✅ JAXB Jakarta (Boot 3) -->
+		<!-- JAXB Jakarta (Boot 3) -->
 		<dependency>
 			<groupId>jakarta.xml.bind</groupId>
 			<artifactId>jakarta.xml.bind-api</artifactId>

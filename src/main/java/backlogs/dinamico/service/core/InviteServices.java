@@ -1,7 +1,10 @@
 package backlogs.dinamico.service.core;
 
+import backlogs.dinamico.service.email.EmailSenderPort;
+import backlogs.dinamico.service.email.EmailValidationService;
 import backlogs.dinamico.infra.security.JwtTokenService;
 import backlogs.dinamico.model.core.*;
+import backlogs.dinamico.repository.core.OrganizationRepository;
 import backlogs.dinamico.repository.core.RoleRepository;
 import backlogs.dinamico.repository.core.UserInviteRepository;
 import backlogs.dinamico.repository.core.UserRepository;
@@ -33,9 +36,12 @@ public class InviteServices {
     private final UserRepository       users;
     private final RoleRepository       roles;
     private final UserRoleRepository   userRoles;
+    private final OrganizationRepository orgRepo;
     private final PasswordEncoder      encoder;
     private final JwtTokenService      tokens;
     private final AuthorizationContextService authz;
+    private final EmailValidationService emailValidation;
+    private final EmailSenderPort        emailSender;
 
     @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
     private String frontendBaseUrl;
@@ -96,18 +102,23 @@ public class InviteServices {
         if (effectiveTtl.compareTo(Duration.ofDays(30)) > 0)
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ttl_too_large");
 
-        String token = randomToken();
-        Instant now  = Instant.now();
+        // ── 1. Validar MX records — el dominio debe aceptar emails ────────────
+        emailValidation.validateOnly(emailNorm);
 
-        // ── FIX 2: logFilters se guarda en el UserInvite ──────────────────────
+        // ── 2. OTP de 6 dígitos — ES el token de aceptación ──────────────────
+        String otp     = generateOtp();
+        String otpHash = encoder.encode(otp);   // guardar hasheado, nunca en claro
+
+        Instant now = Instant.now();
+
         var inv = UserInvite.builder()
                 .tenantId(tenantId)
                 .email(emailNorm)
                 .emailCi(emailCi)
                 .roles(safeRoles)
                 .systems(safeSystems)
-                .logFilters(logFilters)     // ← nuevo campo
-                .token(token)
+                .logFilters(logFilters)
+                .token(otpHash)              // ← hash del OTP
                 .expiresAt(now.plus(effectiveTtl))
                 .status("PENDING")
                 .createdAt(now)
@@ -116,10 +127,21 @@ public class InviteServices {
 
         UserInvite saved = invites.save(inv);
 
-        String inviteLink = buildInviteLink(saved);
-        log.info("[INVITE] email={} tenant={} roles={} systems={} logFilters={} token={} link={}",
-                emailCi, tenantId.toHexString(), safeRoles, safeSystems,
-                logFilters != null ? "present" : "none", token, inviteLink);
+        // ── 3. Enviar OTP con nombre de la organización ───────────────────────
+        String orgName = orgRepo.findById(tenantId)
+                .map(Organization::getName)
+                .orElse("tu organización");
+        try {
+            emailSender.sendInviteOtp(emailNorm, otp, (int) effectiveTtl.toHours(), orgName);
+        } catch (Exception e) {
+            invites.delete(saved);
+            log.error("[INVITE] Falló envío OTP a {} — invite eliminado: {}", emailNorm, e.getMessage());
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "email_delivery_failed: no se pudo enviar el código. Verifica que el email exista.");
+        }
+
+        log.info("[INVITE] OTP enviado a {} tenant={} roles={} systems={}",
+                emailCi, tenantId.toHexString(), safeRoles, safeSystems);
 
         return saved;
     }
@@ -127,14 +149,26 @@ public class InviteServices {
     // ── Aceptar invitación ────────────────────────────────────────────────────
 
     @Transactional
-    public Map<String, Object> accept(String token, String name, String password) {
+    public Map<String, Object> accept(String otp, String name, String password) {
 
-        if (!StringUtils.hasText(token))    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "token_required");
+        if (!StringUtils.hasText(otp))      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "otp_required");
         if (!StringUtils.hasText(name))     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name_required");
         if (!StringUtils.hasText(password)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "password_required");
 
-        var inv = invites.findByTokenAndStatus(token, "PENDING")
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "invite_not_found"));
+        // OTP de 6 dígitos — buscar todos los PENDING y validar con bcrypt
+        // (no podemos buscar por hash directamente porque bcrypt es one-way)
+        if (!otp.trim().matches("^\\d{6}$"))
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "otp_must_be_6_digits");
+
+        // Buscar invite PENDING que coincida con el OTP
+        // Estrategia: buscar los PENDING recientes y verificar bcrypt
+        var pendingInvites = invites.findByStatusOrderByCreatedAtDesc("PENDING");
+
+        UserInvite inv = pendingInvites.stream()
+                .filter(i -> encoder.matches(otp.trim(), i.getToken()))
+                .findFirst()
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "invite_not_found: código inválido o ya utilizado"));
 
         if (Instant.now().isAfter(inv.getExpiresAt())) {
             inv.setStatus("EXPIRED");
@@ -289,9 +323,10 @@ public class InviteServices {
                 .toList();
     }
 
-    private String randomToken() {
-        byte[] b = new byte[32];
+    private String generateOtp() {
+        byte[] b = new byte[4];
         new SecureRandom().nextBytes(b);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(b);
+        int code = 100_000 + (Math.abs((b[0] << 16) | (b[1] << 8) | b[2]) % 900_000);
+        return String.valueOf(code);
     }
 }
