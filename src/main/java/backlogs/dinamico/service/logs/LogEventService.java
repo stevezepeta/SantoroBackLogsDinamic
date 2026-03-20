@@ -4,6 +4,7 @@ import backlogs.dinamico.api.dto.logs.LogEventIngestReq;
 import backlogs.dinamico.api.dto.logs.LogTimelineResponse;
 import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.infra.security.LogFilterCriteria;
+import backlogs.dinamico.infra.ws.DashboardNotifier;
 import backlogs.dinamico.model.log.LogEvent;
 import backlogs.dinamico.repository.log.LogEventRepository;
 import backlogs.dinamico.security.auth.ScopeGuard;
@@ -33,6 +34,7 @@ public class LogEventService {
     private final LogEventRepository repo;
     private final MongoTemplate mongoTemplate;
     private final ScopeGuard scopeGuard;
+    private final DashboardNotifier dashboardNotifier;
 
     // ── ALL ───────────────────────────────────────────────────────────────────
 
@@ -394,7 +396,12 @@ public class LogEventService {
                 .meta(req.meta())
                 .build();
 
-        return repo.save(event);
+        LogEvent saved = repo.save(event);
+
+        // ── Notificar dashboard en tiempo real ───────────────────────────────
+        dashboardNotifier.notifyNewLog(tenantId, saved.getSystem());
+
+        return saved;
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
