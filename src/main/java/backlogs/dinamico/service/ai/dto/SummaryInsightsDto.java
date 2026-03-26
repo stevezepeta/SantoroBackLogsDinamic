@@ -29,6 +29,8 @@ public class SummaryInsightsDto {
     public int activeBuckets;
     public int buckets;
 
+    public String system;
+
     // 0..1
     public double errorRate;
 

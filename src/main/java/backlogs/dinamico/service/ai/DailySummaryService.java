@@ -60,6 +60,10 @@ public class DailySummaryService {
     private static final String F_MSG_KEY = "messageKey";
 
     public DailySummaryDto buildDailySummary(ObjectId tenantId, int days, String tz, Instant from, Instant to) {
+        return buildDailySummary(tenantId, days, tz, from, to, null);
+    }
+
+    public DailySummaryDto buildDailySummary(ObjectId tenantId, int days, String tz, Instant from, Instant to, String system) {
 
         int safeDays = sanitizeDays(days);
         ZoneId zone = safeZone(tz);
@@ -93,7 +97,7 @@ public class DailySummaryService {
         Instant rangeTo   = endExclusiveZdt.toInstant();
 
         // 1) Totales por día + severities
-        List<Document> totals = aggregateTotalsByDay(tenantId, rangeFrom, rangeTo, zone.getId());
+        List<Document> totals = aggregateTotalsByDay(tenantId, rangeFrom, rangeTo, zone.getId(), system);
 
         // fallback si sale vacío: tomar último eventTime real
         if (totals.isEmpty()) {
@@ -106,7 +110,7 @@ public class DailySummaryService {
                 rangeFrom = startInclusiveZdt.toInstant();
                 rangeTo = endExclusiveZdt.toInstant();
 
-                totals = aggregateTotalsByDay(tenantId, rangeFrom, rangeTo, zone.getId());
+                totals = aggregateTotalsByDay(tenantId, rangeFrom, rangeTo, zone.getId(), system);
             }
         }
 
@@ -120,19 +124,19 @@ public class DailySummaryService {
 
         // 2) Tops por día
         Map<Date, List<DailySummaryDto.TopItem>> topSystems =
-                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_SYS, 5);
+                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_SYS, 5, system);
 
         Map<Date, List<DailySummaryDto.TopItem>> topTypes =
-                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_TYPE, 5);
+                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_TYPE, 5, system);
 
         Map<Date, List<DailySummaryDto.TopItem>> topStatus =
-                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_STATUS, 5);
+                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_STATUS, 5, system);
 
         Map<Date, List<DailySummaryDto.TopItem>> topOutcome =
-                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_OUT, 5);
+                aggregateTopByDay(tenantId, rangeFrom, rangeTo, zone.getId(), F_OUT, 5, system);
 
         Map<Date, List<DailySummaryDto.TopError>> topErrors =
-                aggregateTopErrorsByDay(tenantId, rangeFrom, rangeTo, zone.getId(), 5);
+                aggregateTopErrorsByDay(tenantId, rangeFrom, rangeTo, zone.getId(), 5, system);
 
         // 3) Construir todos los días del rango (para buckets vacíos)
         List<Date> dayStarts = buildDayStarts(startInclusiveZdt, endExclusiveZdt);
@@ -190,6 +194,10 @@ public class DailySummaryService {
 
     // ----------------- Aggregations -----------------
     private List<Document> aggregateTotalsByDay(ObjectId tenantId, Instant from, Instant to, String tz) {
+        return aggregateTotalsByDay(tenantId, from, to, tz, null);
+    }
+
+    private List<Document> aggregateTotalsByDay(ObjectId tenantId, Instant from, Instant to, String tz, String system) {
 
         var severitiesExpr = (org.springframework.data.mongodb.core.aggregation.AggregationExpression)
                 ctx -> new Document("$arrayToObject",
@@ -200,10 +208,18 @@ public class DailySummaryService {
                 new Document("$cond", List.of("$" + F_IS_ERROR, 1, 0));
 
         Aggregation agg = newAggregation(
-                match(new Criteria()
-                        .and(F_TENANT).is(tenantId)
-                        .and(F_TIME).gte(Date.from(from)).lt(Date.from(to))
-                        .and(F_SEV).exists(true).ne(null).ne("")
+                match(StringUtils.hasText(system)
+                                ? new Criteria().andOperator(
+                                Criteria.where(F_TENANT).is(tenantId),
+                                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                                Criteria.where(F_SEV).exists(true).ne(null).ne(""),
+                                Criteria.where(F_SYS).is(system.trim())
+                        )
+                                : new Criteria().andOperator(
+                                Criteria.where(F_TENANT).is(tenantId),
+                                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                                Criteria.where(F_SEV).exists(true).ne(null).ne("")
+                        )
                 ),
 
                 addFields().addFieldWithValue("day",
@@ -245,12 +261,26 @@ public class DailySummaryService {
     private Map<Date, List<DailySummaryDto.TopItem>> aggregateTopByDay(
             ObjectId tenantId, Instant from, Instant to, String tz, String field, int limit
     ) {
+        return aggregateTopByDay(tenantId, from, to, tz, field, limit, null);
+    }
+
+    private Map<Date, List<DailySummaryDto.TopItem>> aggregateTopByDay(
+            ObjectId tenantId, Instant from, Instant to, String tz, String field, int limit, String system
+    ) {
+        Criteria timeCriteria = Criteria.where(F_TENANT).is(tenantId)
+                .and(F_TIME).gte(Date.from(from)).lt(Date.from(to));
+        Criteria fieldCriteria = Criteria.where(field).exists(true).ne(null).ne("");
+        Criteria baseCriteria;
+        if (StringUtils.hasText(system) && !F_SYS.equals(field)) {
+            baseCriteria = new Criteria().andOperator(timeCriteria, fieldCriteria, Criteria.where(F_SYS).is(system.trim()));
+        } else if (StringUtils.hasText(system) && F_SYS.equals(field)) {
+            baseCriteria = new Criteria().andOperator(timeCriteria, Criteria.where(F_SYS).is(system.trim()));
+        } else {
+            baseCriteria = new Criteria().andOperator(timeCriteria, fieldCriteria);
+        }
 
         Aggregation agg = newAggregation(
-                match(Criteria.where(F_TENANT).is(tenantId)
-                        .and(F_TIME).gte(Date.from(from)).lt(Date.from(to))
-                        .and(field).exists(true).ne(null).ne("")
-                ),
+                match(baseCriteria),
 
                 addFields().addFieldWithValue("day",
                         new Document("$dateTrunc",
@@ -305,17 +335,34 @@ public class DailySummaryService {
     private Map<Date, List<DailySummaryDto.TopError>> aggregateTopErrorsByDay(
             ObjectId tenantId, Instant from, Instant to, String tz, int limit
     ) {
+        return aggregateTopErrorsByDay(tenantId, from, to, tz, limit, null);
+    }
+
+    private Map<Date, List<DailySummaryDto.TopError>> aggregateTopErrorsByDay(
+            ObjectId tenantId, Instant from, Instant to, String tz, int limit, String system
+    ) {
         int safeLimit = Math.min(Math.max(limit, 1), 20);
 
         AggregationExpression sliceItems = ctx ->
                 new Document("$slice", List.of("$items", safeLimit));
 
+        Criteria errorCriteria = StringUtils.hasText(system)
+                ? new Criteria().andOperator(
+                Criteria.where(F_TENANT).is(tenantId),
+                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                Criteria.where(F_IS_ERROR).in(true),
+                Criteria.where(F_MSG_KEY).exists(true).ne(null).ne(""),
+                Criteria.where(F_SYS).is(system.trim())
+        )
+                : new Criteria().andOperator(
+                Criteria.where(F_TENANT).is(tenantId),
+                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                Criteria.where(F_IS_ERROR).in(true),
+                Criteria.where(F_MSG_KEY).exists(true).ne(null).ne("")
+        );
+
         Aggregation agg = newAggregation(
-                match(Criteria.where(F_TENANT).is(tenantId)
-                        .and(F_TIME).gte(Date.from(from)).lt(Date.from(to))
-                        .and(F_IS_ERROR).in(true)
-                        .and(F_MSG_KEY).exists(true).ne(null).ne("")
-                ),
+                match(errorCriteria),
 
                 addFields().addFieldWithValue("day",
                         new Document("$dateTrunc",

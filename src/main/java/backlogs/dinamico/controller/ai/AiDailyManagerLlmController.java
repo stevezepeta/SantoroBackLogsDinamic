@@ -36,7 +36,7 @@ public class AiDailyManagerLlmController {
             throw new IllegalStateException("tenant_not_resolved (JWT no seteo TenantContex)");
         }
 
-        DailyManagerSummaryDto mgr = dailyManagerService.buildManagerSummary(tenantId, days, tz, from, to);
+        DailyManagerSummaryDto mgr = dailyManagerService.buildManagerSummary(tenantId, days, tz, from, to, system, null);
 
         List<AiTicketDraftDto> drafts = dailyManagerService.buildTicketDraftsFromManagerSummary(
                 tenantId, days, tz, from, to, system, maxTickets

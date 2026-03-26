@@ -78,7 +78,8 @@ public class SecurityConfig {
                             "/api/auth/refresh",
                             "/api/auth/accept-invite",
                             "/api/auth/forgot-password",
-                            "/api/auth/reset-password"
+                            "/api/auth/reset-password",
+                            "/api/auth/change-password"
                     ).permitAll();
 
                     // Panel de Santoro

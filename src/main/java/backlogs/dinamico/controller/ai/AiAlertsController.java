@@ -71,6 +71,8 @@ public class AiAlertsController {
             @RequestParam(required = false) String state,        // OPEN|ACKED|RESOLVED
             @RequestParam(required = false) String status,       // OK|WARN|CRIT
             @RequestParam(required = false) String granularity,  // hourly|daily
+            @RequestParam(required = false) String from,         // ISO-8601 — filtro de fecha desde
+            @RequestParam(required = false) String to,           // ISO-8601 — filtro de fecha hasta
             @RequestParam(defaultValue = DEFAULT_TZ) String tz
     ) {
         ObjectId tenantId = hourlySummaryService.resolveTenantId(auth, req);
@@ -83,6 +85,20 @@ public class AiAlertsController {
         );
 
         Criteria c = Criteria.where("tenantId").is(tenantId);
+
+        // Filtro de fecha — limita el rango de alertas devueltas
+        if (StringUtils.hasText(from)) {
+            try {
+                Instant fromInstant = Instant.parse(from.trim());
+                c = c.and("createdAt").gte(fromInstant);
+            } catch (Exception ignored) {}
+        }
+        if (StringUtils.hasText(to)) {
+            try {
+                Instant toInstant = Instant.parse(to.trim());
+                c = c.and("createdAt").lte(toInstant);
+            } catch (Exception ignored) {}
+        }
 
         if (StringUtils.hasText(granularity)) {
             c = c.and("granularity").is(granularity.trim().toLowerCase(Locale.ROOT));

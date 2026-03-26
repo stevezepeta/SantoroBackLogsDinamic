@@ -43,7 +43,7 @@ public class InviteServices {
     private final EmailValidationService emailValidation;
     private final EmailSenderPort        emailSender;
 
-    @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
+    @Value("${app.frontend.base-url:https://dashboard.grupo-santoro.com.mx}")
     private String frontendBaseUrl;
 
     // ── Crear invitación PENDING ───────────────────────────────────────────────
@@ -284,7 +284,7 @@ public class InviteServices {
 
     public String buildInviteLink(UserInvite invite) {
         if (invite == null || !StringUtils.hasText(invite.getToken())) return null;
-        return frontendBaseUrl + "/accept-invite?token=" + invite.getToken();
+        return frontendBaseUrl + "/#/accept-invite?token=" + invite.getToken();
     }
 
     private RoleCode parseSingleRole(List<String> roleCodes) {

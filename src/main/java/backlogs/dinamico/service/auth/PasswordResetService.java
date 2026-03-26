@@ -34,7 +34,7 @@ public class PasswordResetService {
     private final PasswordResetTokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
 
-    @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
+    @Value("${app.frontend.base-url:https://dashboard.grupo-santoro.com.mx}")
     private String frontendBaseUrl;
 
     @Value("${app.password-reset.ttl-minutes:30}")
@@ -89,7 +89,7 @@ public class PasswordResetService {
 
         tokenRepository.save(entity);
 
-        String resetLink = frontendBaseUrl + "/reset-password?token" + rawToken;
+        String resetLink = frontendBaseUrl + "/#/reset-password?token" + rawToken;
 
         log.info("[PWD-RESET] Link para {}: {}", email, resetLink);
     }

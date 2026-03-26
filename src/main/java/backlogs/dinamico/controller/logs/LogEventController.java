@@ -27,9 +27,9 @@ public class LogEventController {
 
     @PostMapping("/events")
     public ApiResponse<?> ingest(
-                @Valid @RequestBody LogEventIngestReq req,
-                Authentication auth
-            ) {
+            @Valid @RequestBody LogEventIngestReq req,
+            Authentication auth
+    ) {
 
         LogEvent saved = service.ingest(req);
 
@@ -140,6 +140,12 @@ public class LogEventController {
 
     @GetMapping("/events/all")
     public ApiResponse<Map<String, Object>> all(
+            @RequestParam(required = false) String system,       // ← NUEVO filtro principal
+            @RequestParam(required = false) String eventType,    // ← NUEVO
+            @RequestParam(required = false) String status,       // ← NUEVO
+            @RequestParam(required = false) String outcome,      // ← NUEVO
+            @RequestParam(required = false) String severity,     // ← NUEVO
+
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate fromDate,
 
@@ -156,7 +162,8 @@ public class LogEventController {
         Instant from = (fromDate != null) ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC) : null;
         Instant to   = (toDate != null) ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC) : null;
 
-        var result = service.all(auth, from, to, page, size, sortBy, sortDir);
+        var result = service.all(auth, system, eventType, status, outcome, severity,
+                from, to, page, size, sortBy, sortDir);
 
         Map<String, Object> data = Map.of(
                 "items", result.getContent(),

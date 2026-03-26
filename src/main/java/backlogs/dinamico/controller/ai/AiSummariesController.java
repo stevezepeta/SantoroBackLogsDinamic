@@ -184,12 +184,21 @@ public class AiSummariesController {
 
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
-            Instant to
+            Instant to,
+
+            @RequestParam(required = false)
+            String system   // ← filtrar por sistema del usuario
     ) {
         ObjectId tenantId = resolveTenantId(auth, req);
 
-        HourlySummaryDto summary = hourlySummaryService.buildHourlySummary(tenantId, hours, tz, from, to);
+        HourlySummaryDto summary = hourlySummaryService.buildHourlySummary(
+                tenantId, hours, tz, from, to, system   // ← filtra en MongoDB directamente
+        );
         SummaryInsightsDto insights = summaryInsightsService.fromHourly(tenantId, summary);
+
+        if (StringUtils.hasText(system)) {
+            insights.system = system;
+        }
 
         ZoneId zone = safeZone(tz);
         applyLocalWindow(insights, zone);

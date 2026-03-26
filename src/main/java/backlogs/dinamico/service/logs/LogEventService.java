@@ -40,6 +40,11 @@ public class LogEventService {
 
     public Page<LogEvent> all(
             Authentication auth,
+            String system,       // ← NUEVO
+            String eventType,    // ← NUEVO
+            String status,       // ← NUEVO
+            String outcome,      // ← NUEVO
+            String severity,     // ← NUEVO
             Instant from,
             Instant to,
             int page,
@@ -58,28 +63,40 @@ public class LogEventService {
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
 
-        // SCOPE: systems visibles
-        if (!user.isOrgWide()) {
-            var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
-                    : user.getAllowedSystems().stream()
-                    .filter(StringUtils::hasText)
-                    .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                    .distinct()
-                    .toList();
-
-            if (allowed.isEmpty()) return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
-            cs.add(Criteria.where("system").in(allowed));
-        } else if (user.getAllowedSystems() != null && !user.getAllowedSystems().isEmpty()) {
-            // orgWide=true pero con systems específicos del invite → respetar restricción
-            var allowed = user.getAllowedSystems().stream()
-                    .filter(StringUtils::hasText)
-                    .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                    .distinct()
-                    .toList();
-            cs.add(Criteria.where("system").in(allowed));
+        // ── SYSTEM FILTER ─────────────────────────────────────────────────────
+        String systemNorm = normalizeUpper(system);
+        if (StringUtils.hasText(systemNorm)) {
+            // Verificar que el usuario tenga acceso al sistema solicitado
+            scopeGuard.requireSystemAccess(user, systemNorm);
+            cs.add(Criteria.where("system").is(systemNorm));
+        } else {
+            // Sin system explícito → scope normal del usuario
+            if (!user.isOrgWide()) {
+                var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
+                        : user.getAllowedSystems().stream()
+                        .filter(StringUtils::hasText)
+                        .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                        .distinct()
+                        .toList();
+                if (allowed.isEmpty()) return new PageImpl<>(List.of(), PageRequest.of(page, size), 0);
+                cs.add(Criteria.where("system").in(allowed));
+            } else if (user.getAllowedSystems() != null && !user.getAllowedSystems().isEmpty()) {
+                var allowed = user.getAllowedSystems().stream()
+                        .filter(StringUtils::hasText)
+                        .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                        .distinct()
+                        .toList();
+                cs.add(Criteria.where("system").in(allowed));
+            }
         }
 
-        // FECHAS
+        // ── FILTROS ADICIONALES ───────────────────────────────────────────────
+        if (StringUtils.hasText(eventType)) cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
+        if (StringUtils.hasText(status))    cs.add(Criteria.where("status").is(normalizeUpper(status)));
+        if (StringUtils.hasText(outcome))   cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
+        if (StringUtils.hasText(severity))  cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
+
+        // ── FECHAS ────────────────────────────────────────────────────────────
         if (from != null || to != null) {
             Criteria time = Criteria.where("eventTime");
             if (from != null) time = time.gte(from);
@@ -88,8 +105,6 @@ public class LogEventService {
         }
 
         Criteria finalC = new Criteria().andOperator(cs.toArray(new Criteria[0]));
-
-        // ── APLICAR logFilters del VIEWER (outcome, status, severity, eventType)
         finalC = LogFilterCriteria.apply(finalC);
 
         Query q = new Query(finalC);
@@ -105,6 +120,7 @@ public class LogEventService {
 
         return new PageImpl<>(items, pageable, total);
     }
+
 
     // ── SEARCH ────────────────────────────────────────────────────────────────
 

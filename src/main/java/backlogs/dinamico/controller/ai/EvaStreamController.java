@@ -50,17 +50,38 @@ public class EvaStreamController {
         ObjectId tenantId = hourlySummaryService.resolveTenantId(auth, req);
         String   actor    = resolveActorName(auth);
 
+        // ── Extraer scope del usuario autenticado ─────────────────────────────
+        AuthUser authUser = (auth != null && auth.getPrincipal() instanceof AuthUser au) ? au : null;
+        java.util.List<String> allowedSystems = authUser != null && authUser.getAllowedSystems() != null
+                ? authUser.getAllowedSystems().stream().toList()
+                : java.util.List.of();
+        boolean isOrgWide = authUser != null && authUser.isOrgWide()
+                && (authUser.getAllowedSystems() == null || authUser.getAllowedSystems().isEmpty());
+
+        // Si el usuario especificó un system en el request, verificar que tenga acceso
+        String resolvedSystem = system;
+        if (resolvedSystem != null && !isOrgWide && !allowedSystems.isEmpty()
+                && !allowedSystems.contains(resolvedSystem.toUpperCase())) {
+            resolvedSystem = allowedSystems.get(0); // usar el primero permitido
+        }
+        // Si no especificó system y tiene un solo sistema asignado, usarlo automáticamente
+        if (resolvedSystem == null && !allowedSystems.isEmpty() && allowedSystems.size() == 1) {
+            resolvedSystem = allowedSystems.get(0);
+        }
+
         SseEmitter emitter = new SseEmitter(60_000L);
 
         EvaStreamRequest streamReq = EvaStreamRequest.builder()
                 .message(message)
-                .system(system)
+                .system(resolvedSystem)
                 .granularity(granularity)
                 .days(days)
                 .hours(hours)
                 .tz(tz)
-                .tenantId(tenantId)   // viene del JWT, nunca de un param externo
+                .tenantId(tenantId)
                 .actorName(actor)
+                .allowedSystems(allowedSystems)
+                .isOrgWide(isOrgWide)
                 .build();
 
         executor.execute(() -> {

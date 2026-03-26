@@ -17,4 +17,11 @@ public class EvaStreamRequest {
     private ObjectId tenantId;
     private String actorName;
 
+
+    /**
+     * System que el usuario puede ver - extraidos del JWT
+     * */
+    private java.util.List<String> allowedSystems;
+    private boolean isOrgWide;
+
 }

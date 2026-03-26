@@ -40,7 +40,7 @@ public class JavaMailEmailSender implements EmailSenderPort {
     @Value("${app.mail.from-name:Backlogs Santoro}")
     private String fromName;
 
-    @Value("${app.frontend.base-url:http://187.188.66.56:8032}")
+    @Value("${app.frontend.base-url:https://dashboard.grupo-santoro.com.mx}")
     private String frontendBaseUrl;
 
     @Override
@@ -55,7 +55,7 @@ public class JavaMailEmailSender implements EmailSenderPort {
     @Override
     public void sendInviteOtp(String toEmail, String otp, int ttlHours, String orgName) {
         String displayOrg = (orgName != null && !orgName.isBlank()) ? orgName : "tu organización";
-        String acceptLink = frontendBaseUrl + "/accept-invite?otp=" + otp;
+        String acceptLink = frontendBaseUrl + "/#/accept-invite?otp=" + otp;
         sendEmail(toEmail,
                 "Has sido invitado a " + displayOrg + " · DataLogs",
                 buildBaseTemplate(

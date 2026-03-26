@@ -4,12 +4,10 @@ import backlogs.dinamico.api.dto.CreateOrgRequest;
 import backlogs.dinamico.api.dto.santoro.CreateOrgResponse;
 import backlogs.dinamico.api.dto.santoro.OrgSummaryDto;
 import backlogs.dinamico.api.dto.santoro.SantoroPanelStatsDto;
-import backlogs.dinamico.model.core.Organization;
-import backlogs.dinamico.model.core.User;
+import backlogs.dinamico.model.core.*;
 import backlogs.dinamico.model.ingest.ApiKey;
 import backlogs.dinamico.repository.catalog.ApiKeyRep;
-import backlogs.dinamico.repository.core.OrganizationRepository;
-import backlogs.dinamico.repository.core.UserRepository;
+import backlogs.dinamico.repository.core.*;
 import backlogs.dinamico.service.email.EmailValidationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -43,18 +41,15 @@ public class SantoroPanelService {
     private static final String SANTORO_DOMAIN = "grupo-santoro.com.mx";
 
     private final OrganizationRepository orgRepo;
-    private final UserRepository userRepo;
-    private final ApiKeyRep apiKeyRep;
-    private final PasswordEncoder passwordEncoder;
-
+    private final UserRepository         userRepo;
+    private final RoleRepository         roleRepo;       // ← nuevo
+    private final UserRoleRepository     userRoleRepo;   // ← nuevo
+    private final ApiKeyRep              apiKeyRep;
+    private final PasswordEncoder        passwordEncoder;
     private final EmailValidationService emailValidationService;
 
     // ── Validación de dominio ─────────────────────────────────────────────────
 
-    /**
-     * Verifica que el email del usuario autenticado pertenezca al dominio Santoro.
-     * Llamar al inicio de cada método de servicio.
-     */
     public void assertSantoroDomain(String email) {
         if (!StringUtils.hasText(email) ||
                 !email.toLowerCase(Locale.ROOT).endsWith("@" + SANTORO_DOMAIN)) {
@@ -66,24 +61,20 @@ public class SantoroPanelService {
     // ── Stats ─────────────────────────────────────────────────────────────────
 
     public SantoroPanelStatsDto buildStats() {
-        // Organizaciones
-        long totalOrgs     = orgRepo.count();
-        long activeOrgs    = orgRepo.findByStatus("active",   Pageable.unpaged()).getTotalElements();
-        long disabledOrgs  = orgRepo.findByStatus("disabled", Pageable.unpaged()).getTotalElements();
+        long totalOrgs    = orgRepo.count();
+        long activeOrgs   = orgRepo.findByStatus("active",   Pageable.unpaged()).getTotalElements();
+        long disabledOrgs = orgRepo.findByStatus("disabled", Pageable.unpaged()).getTotalElements();
 
-        // Usuarios
         long totalUsers    = userRepo.count();
         long activeUsers   = userRepo.countByStatus("active");
         long inactiveUsers = userRepo.countByStatus("disabled");
         long invitedUsers  = userRepo.countByStatus("invited");
 
-        // API Keys
-        long totalKeys    = apiKeyRep.count();
-        long activeKeys   = countKeysByStatus("active");
-        long revokedKeys  = countKeysByStatus("revoked");
-        long expiredKeys  = countKeysByStatus("expired");
+        long totalKeys   = apiKeyRep.count();
+        long activeKeys  = countKeysByStatus("active");
+        long revokedKeys = countKeysByStatus("revoked");
+        long expiredKeys = countKeysByStatus("expired");
 
-        // Claves que vencen en los próximos 7 días
         Instant in7days = Instant.now().plusSeconds(7L * 24 * 60 * 60);
         long expiringKeys = apiKeyRep.findAll().stream()
                 .filter(k -> "active".equalsIgnoreCase(k.getStatus()))
@@ -111,14 +102,8 @@ public class SantoroPanelService {
     public Page<OrgSummaryDto> listOrganizations(String search, String status,
                                                  int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-
         Page<Organization> orgs;
-
-        if (StringUtils.hasText(search) && StringUtils.hasText(status)) {
-            // Spring Data no soporta combinación directa: filtrar en memoria sobre búsqueda
-            orgs = orgRepo.findByNameContainingIgnoreCaseOrDomainContainingIgnoreCaseOrCodeContainingIgnoreCase(
-                    search, search, search, pageable);
-        } else if (StringUtils.hasText(search)) {
+        if (StringUtils.hasText(search)) {
             orgs = orgRepo.findByNameContainingIgnoreCaseOrDomainContainingIgnoreCaseOrCodeContainingIgnoreCase(
                     search, search, search, pageable);
         } else if (StringUtils.hasText(status)) {
@@ -126,7 +111,6 @@ public class SantoroPanelService {
         } else {
             orgs = orgRepo.findAll(pageable);
         }
-
         return orgs.map(this::toOrgSummary);
     }
 
@@ -144,8 +128,6 @@ public class SantoroPanelService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "code_already_exists");
         if (orgRepo.findBySlugIgnoreCase(req.getOrgSlug()).isPresent())
             throw new ResponseStatusException(HttpStatus.CONFLICT, "slug_already_exists");
-
-        emailValidationService.consumeToken(req.getVerificationToken(), req.getAdminEmail());
 
         // Crear organización
         Organization org = Organization.builder()
@@ -165,28 +147,54 @@ public class SantoroPanelService {
                 .build();
 
         org = orgRepo.save(org);
+        ObjectId tenantId = org.getId();
 
-        // Generar password temporal si no se proporcionó
         String rawPassword = StringUtils.hasText(req.getTemporaryPassword())
                 ? req.getTemporaryPassword()
                 : generateSecurePassword();
 
         // Crear superAdmin
         User admin = User.builder()
-                .tenantId(org.getId())
+                .tenantId(tenantId)
                 .name(req.getAdminName().trim())
                 .email(req.getAdminEmail().trim().toLowerCase(Locale.ROOT))
                 .passwordHash(passwordEncoder.encode(rawPassword))
                 .status("active")
-                .mustChangePassword(true)   // obliga a cambiar en el primer login
+                .mustChangePassword(true)
                 .build();
 
         admin = userRepo.save(admin);
 
-        log.info("[SantoroPanelService] Org creada: {} | Admin: {}", org.getId(), admin.getEmail());
+        // ── ASIGNAR ROL ORG_ADMIN ─────────────────────────────────────────────
+        // Buscar el rol ORG_ADMIN del tenant — si no existe lo crea con todos los permisos
+        Role orgAdminRole = roleRepo.findByTenantIdAndCode(tenantId, RoleCode.ORG_ADMIN)
+                .orElseGet(() -> {
+                    Role r = Role.builder()
+                            .tenantId(tenantId)
+                            .code(RoleCode.ORG_ADMIN)
+                            .name("Administrador de Organización")
+                            .description("Acceso completo a la organización")
+                            .orgWide(true)
+                            .systemScoped(false)
+                            .permissions(java.util.EnumSet.allOf(PermissionCode.class))
+                            .build();
+                    return roleRepo.save(r);
+                });
+
+        // Vincular usuario ↔ rol
+        boolean alreadyHasRole = userRoleRepo.existsByTenantIdAndUserIdAndRoleId(
+                tenantId, admin.getId(), orgAdminRole.getId());
+
+        if (!alreadyHasRole) {
+            userRoleRepo.save(UserRole.of(tenantId, admin.getId(), orgAdminRole.getId()));
+            log.info("[SantoroPanelService] Rol ORG_ADMIN asignado a {}", admin.getEmail());
+        }
+        // ─────────────────────────────────────────────────────────────────────
+
+        log.info("[SantoroPanelService] Org creada: {} | Admin: {}", tenantId, admin.getEmail());
 
         return CreateOrgResponse.builder()
-                .orgId(org.getId().toHexString())
+                .orgId(tenantId.toHexString())
                 .orgName(org.getName())
                 .orgDomain(org.getDomain())
                 .orgCode(org.getCode())
@@ -195,15 +203,11 @@ public class SantoroPanelService {
                 .adminUserId(admin.getId().toHexString())
                 .adminName(admin.getName())
                 .adminEmail(admin.getEmail())
-                .temporaryPassword(rawPassword)   // solo esta vez
+                .temporaryPassword(rawPassword)
                 .createdAt(fmt(org.getCreatedAt()))
                 .build();
     }
 
-    /**
-     * Activa o desactiva una organización.
-     * Cuando se deshabilita una org se deshabilitan también todas sus API Keys.
-     */
     public OrgSummaryDto setOrganizationStatus(ObjectId id, String newStatus) {
         String status = newStatus.toLowerCase(Locale.ROOT);
         if (!status.equals("active") && !status.equals("disabled"))
@@ -216,19 +220,14 @@ public class SantoroPanelService {
         org.setStatus(status);
         orgRepo.save(org);
 
-        // Si se deshabilita la org → revocar todas sus API Keys activas
         if ("disabled".equals(status)) {
             List<ApiKey> keys = apiKeyRep.findByTenantIdOrderByCreatedAtDesc(id);
             keys.stream()
                     .filter(k -> "active".equalsIgnoreCase(k.getStatus()))
-                    .forEach(k -> {
-                        k.setStatus("revoked");
-                        apiKeyRep.save(k);
-                    });
+                    .forEach(k -> { k.setStatus("revoked"); apiKeyRep.save(k); });
             log.info("[SantoroPanelService] Org {} deshabilitada. {} API Keys revocadas.",
                     id.toHexString(), keys.size());
         }
-
         return toOrgSummary(org);
     }
 
@@ -236,7 +235,6 @@ public class SantoroPanelService {
 
     public Page<UserView> listAllUsers(String search, String status, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-
         Page<User> users;
         if (StringUtils.hasText(search)) {
             users = userRepo.findByNameContainingIgnoreCaseOrEmailContainingIgnoreCase(
@@ -246,7 +244,6 @@ public class SantoroPanelService {
         } else {
             users = userRepo.findAllByOrderByCreatedAtDesc(pageable);
         }
-
         return users.map(this::toUserView);
     }
 
@@ -254,9 +251,7 @@ public class SantoroPanelService {
                                          int page, int size) {
         orgRepo.findById(orgId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "org_not_found"));
-
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-
         Page<User> users;
         if (StringUtils.hasText(search)) {
             users = userRepo.findByTenantIdAndNameContainingIgnoreCaseOrTenantIdAndEmailContainingIgnoreCase(
@@ -266,7 +261,6 @@ public class SantoroPanelService {
         } else {
             users = userRepo.findByTenantId(orgId, pageable);
         }
-
         return users.map(this::toUserView);
     }
 
@@ -274,18 +268,13 @@ public class SantoroPanelService {
 
     public Page<ApiKeyView> listAllApiKeys(String search, String status, int page, int size) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-
         Page<ApiKey> keys;
         if (StringUtils.hasText(search) && StringUtils.hasText(status)) {
             keys = apiKeyRep.findByTenantIdAndStatusAndNameContainingIgnoreCase(
                     null, status.toLowerCase(Locale.ROOT), search, pageable);
-        } else if (StringUtils.hasText(status)) {
-            // Sin tenant específico → necesitamos all, no hay método global en el repo → fallback
-            keys = apiKeyRep.findAll(pageable);
         } else {
             keys = apiKeyRep.findAll(pageable);
         }
-
         return keys.map(this::toApiKeyView);
     }
 
@@ -293,9 +282,7 @@ public class SantoroPanelService {
                                              int page, int size) {
         orgRepo.findById(orgId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "org_not_found"));
-
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-
         Page<ApiKey> keys;
         if (StringUtils.hasText(search) && StringUtils.hasText(status)) {
             keys = apiKeyRep.findByTenantIdAndStatusAndNameContainingIgnoreCase(
@@ -307,26 +294,18 @@ public class SantoroPanelService {
         } else {
             keys = apiKeyRep.findByTenantId(orgId, pageable);
         }
-
         return keys.map(this::toApiKeyView);
     }
 
-    /**
-     * Activa o revoca una API Key individual.
-     * Solo se permiten transiciones: active ↔ revoked
-     */
     public ApiKeyView setApiKeyStatus(ObjectId orgId, ObjectId keyId, String newStatus) {
         String status = newStatus.toLowerCase(Locale.ROOT);
         if (!status.equals("active") && !status.equals("revoked"))
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "status_must_be_active_or_revoked");
-
         ApiKey key = apiKeyRep.findByTenantIdAndId(orgId, keyId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "api_key_not_found"));
-
         key.setStatus(status);
         apiKeyRep.save(key);
-
         log.info("[SantoroPanelService] ApiKey {} → status={}", keyId.toHexString(), status);
         return toApiKeyView(key);
     }
@@ -355,10 +334,22 @@ public class SantoroPanelService {
     }
 
     private UserView toUserView(User u) {
-        // Resolver nombre de la organización
         String orgName = u.getTenantId() != null
                 ? orgRepo.findById(u.getTenantId()).map(Organization::getName).orElse("—")
                 : "—";
+
+        // Cargar roles desde user_roles
+        String roles = null;
+        if (u.getTenantId() != null && u.getId() != null) {
+            roles = userRoleRepo.findByTenantIdAndUserId(u.getTenantId(), u.getId())
+                    .stream()
+                    .map(link -> roleRepo.findById(link.getRoleId()).orElse(null))
+                    .filter(java.util.Objects::nonNull)
+                    .map(r -> r.getCode() != null ? r.getCode().name() : r.getName())
+                    .distinct()
+                    .collect(java.util.stream.Collectors.joining(", "));
+            if (roles != null && roles.isBlank()) roles = null;
+        }
 
         return UserView.builder()
                 .id(u.getId().toHexString())
@@ -366,6 +357,7 @@ public class SantoroPanelService {
                 .orgName(orgName)
                 .email(u.getEmail())
                 .name(u.getName())
+                .roles(roles)
                 .status(u.getStatus())
                 .mustChangePassword(u.isMustChangePassword())
                 .lastLoginAt(fmt(u.getLastLoginAt()))
@@ -377,7 +369,6 @@ public class SantoroPanelService {
         String orgName = k.getTenantId() != null
                 ? orgRepo.findById(k.getTenantId()).map(Organization::getName).orElse("—")
                 : "—";
-
         return ApiKeyView.builder()
                 .id(k.getId().toHexString())
                 .tenantId(k.getTenantId() != null ? k.getTenantId().toHexString() : null)
@@ -394,7 +385,7 @@ public class SantoroPanelService {
 
     @lombok.Data @lombok.Builder
     public static class UserView {
-        private String id, tenantId, orgName, email, name, status;
+        private String id, tenantId, orgName, email, name, status, roles;
         private boolean mustChangePassword;
         private String lastLoginAt, createdAt;
     }
@@ -417,14 +408,10 @@ public class SantoroPanelService {
         return t == null ? null : FMT.format(t);
     }
 
-    /**
-     * Genera una contraseña temporal segura de 12 caracteres.
-     * Formato: letras + números + símbolo, fácil de comunicar verbalmente.
-     */
     private String generateSecurePassword() {
         byte[] bytes = new byte[9];
         new SecureRandom().nextBytes(bytes);
         String base = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        return base.substring(0, 8) + "!";   // ej. "aBcD1234!"
+        return base.substring(0, 8) + "!";
     }
 }

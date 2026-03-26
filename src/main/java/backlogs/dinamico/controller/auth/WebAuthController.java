@@ -207,6 +207,74 @@ public class WebAuthController {
         return ResponseEntity.ok(ApiResponse.success("Qr Login successful", login));
     }
 
+    // ── Change Password ───────────────────────────────────────────────────────
+
+    /**
+     * Cambia la contraseña del usuario autenticado.
+     *
+     * Primera vez (mustChangePassword=true):
+     *   currentPassword = la contraseña temporal que recibió
+     *   newPassword     = la que quiere usar de ahora en adelante
+     *
+     * Cambio voluntario (cualquier momento):
+     *   Mismo flujo — siempre se valida la contraseña actual.
+     */
+    @PostMapping("/change-password")
+    public ApiResponse<Map<String, Object>> changePassword(
+            @RequestBody ChangePasswordReq req,
+            org.springframework.security.core.Authentication auth) {
+
+        if (req == null ||
+                !StringUtils.hasText(req.getCurrentPassword()) ||
+                !StringUtils.hasText(req.getNewPassword())) {
+            throw new ResponseStatusException(BAD_REQUEST, "current_password y new_password son requeridos");
+        }
+
+        if (req.getNewPassword().length() < 8) {
+            throw new ResponseStatusException(BAD_REQUEST, "new_password debe tener al menos 8 caracteres");
+        }
+
+        // Obtener usuario del SecurityContext
+        backlogs.dinamico.infra.security.AuthUser principal =
+                (auth != null && auth.getPrincipal() instanceof backlogs.dinamico.infra.security.AuthUser au)
+                        ? au : null;
+
+        if (principal == null) {
+            throw new ResponseStatusException(UNAUTHORIZED, "unauthenticated");
+        }
+
+        User u = userRepo.findById(principal.getUserId())
+                .orElseThrow(() -> new ResponseStatusException(NOT_FOUND, "user_not_found"));
+
+        // Validar contraseña actual
+        if (!passwordEncoder.matches(req.getCurrentPassword(), u.getPasswordHash())) {
+            throw new ResponseStatusException(BAD_REQUEST, "current_password_incorrect");
+        }
+
+        // No permitir la misma contraseña
+        if (passwordEncoder.matches(req.getNewPassword(), u.getPasswordHash())) {
+            throw new ResponseStatusException(BAD_REQUEST, "new_password_must_be_different");
+        }
+
+        // Actualizar hash y limpiar el flag
+        u.setPasswordHash(passwordEncoder.encode(req.getNewPassword()));
+        u.setMustChangePassword(false);
+        u.setUpdatedAt(java.time.Instant.now());
+        userRepo.save(u);
+
+        // Generar nuevos tokens con mustChangePassword=false reflejado
+        ObjectId tenantId = u.getTenantId();
+        AuthorizationContext ctx = authorizationContextService.build(tenantId, u.getId());
+        String accessToken  = tokens.generateAccess(u, tenantId, ctx);
+        String refreshToken = tokens.generateRefresh(u, tenantId, ctx);
+
+        return ApiResponse.ok("Contraseña actualizada", "password_changed", Map.of(
+                "accessToken",        accessToken,
+                "refreshToken",       refreshToken,
+                "mustChangePassword", false
+        ));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void assertActive(User u) {
@@ -258,5 +326,11 @@ public class WebAuthController {
     public static class LoginReq {
         private String email;
         private String password;
+    }
+
+    @Data
+    public static class ChangePasswordReq {
+        private String currentPassword;
+        private String newPassword;
     }
 }

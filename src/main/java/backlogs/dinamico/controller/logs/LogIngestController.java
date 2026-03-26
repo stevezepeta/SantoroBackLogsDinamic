@@ -30,38 +30,6 @@ public class LogIngestController {
     private final LogIngestService service;
     private final LogCommandService commandService;
 
-//    @PostMapping
-//    @PreAuthorize("isAuthenticated()")
-//    public ResponseEntity<ApiResponse<Map<String, Object>>> ingestOne(@Valid @RequestBody LogIngestReq body) {
-//
-//        LogEntry saved = service.ingestOne(body);
-//
-//        Map<String, Object> data = new java.util.LinkedHashMap<>();
-//        data.put("id", saved.getId().toHexString());
-//        data.put("timestamp", saved.getTimestamp());
-//        data.put("level", saved.getLevel());
-//
-//        return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED)
-//                .body(ApiResponse.created("Log almacenado", "/api/logs", data));
-//
-//    }
-
-//    @PostMapping("/batch")
-//    @PreAuthorize("isAuthenticated()")
-//    public ResponseEntity<ApiResponse<Map<String, Object>>> ingestBatch(@Valid @RequestBody LogIngestBatchReq body) {
-//
-//        List<LogEntry> saved = service.ingestBatch(body);
-//
-//        Map<String, Object> data = new java.util.LinkedHashMap<>();
-//        data.put("count", saved.size());
-//        data.put("firstId", saved.isEmpty() ? null : saved.get(0).getId().toHexString());
-//        data.put("ingestAt", java.time.Instant.now());
-//
-//        return ResponseEntity.status(org.springframework.http.HttpStatus.CREATED)
-//                .body(ApiResponse.created("Lote almacenado", "/api/logs", data));
-//
-//    }
-
     // Este reemplaza al antiguo ingestOne(LogIngestReq)
     @PostMapping
     public ResponseEntity<ApiResponse<Map<String, Object>>> ingestOne(

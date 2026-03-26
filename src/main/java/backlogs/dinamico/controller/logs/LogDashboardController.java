@@ -13,17 +13,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 
-/**
- * Endpoints de agregación para el Dashboard.
- *
- * Todos los endpoints aceptan:
- *   ?system=TRUSTVALUE   — filtra por system (opcional si el usuario es orgWide)
- *   &from=2026-01-01T00:00:00Z  — inicio del rango (default: últimos 30 días)
- *   &to=2026-03-19T00:00:00Z    — fin del rango (default: ahora)
- *
- * Retornan datos agregados — no documentos individuales.
- * Tiempo de respuesta: <100ms con índices correctos, independiente del volumen.
- */
+
 @Tag(name = "Dashboard", description = "Agregaciones para el dashboard — reemplaza el GET /all en el frontend.")
 @RestController
 @RequestMapping("/api/logs/dashboard")
@@ -32,12 +22,6 @@ public class LogDashboardController {
 
     private final LogDashboardService dashboardService;
 
-    /**
-     * Cards del top: total, top eventTypes, outcome, severity, status, tags,
-     * locaciones, actores, environments.
-     *
-     * Reemplaza: el frontend que clasifica el GET /all en JS.
-     */
     @Operation(summary = "Stats del dashboard",
             description = "Totales y distribuciones — alimenta todas las cards y gráficas de barras.")
     @GetMapping("/stats")
@@ -52,15 +36,6 @@ public class LogDashboardController {
                 dashboardService.stats(auth, system, from, to));
     }
 
-    /**
-     * Series de tiempo: eventos por día, semana, mes + status × día.
-     *
-     * Alimenta:
-     *   - "Eventos por Día y Acumulado"
-     *   - "Eventos por Semana y Acumulado"
-     *   - "Eventos por Mes y Acumulado"
-     *   - Gráfica de líneas "Estatus — Comportamiento a través del tiempo"
-     */
     @Operation(summary = "Series de tiempo para gráficas de líneas")
     @GetMapping("/series")
     @PreAuthorize("hasAuthority('PERM_LOG_READ')")
@@ -74,11 +49,6 @@ public class LogDashboardController {
                 dashboardService.series(auth, system, from, to));
     }
 
-    /**
-     * Métricas HTTP: latencia p95 por statusCode × método.
-     * Alimenta la gráfica radar "HTTP — Latencia p95".
-     * Solo retorna datos si los logs tienen el campo http.
-     */
     @Operation(summary = "Métricas HTTP para gráfica radar")
     @GetMapping("/http")
     @PreAuthorize("hasAuthority('PERM_LOG_READ')")

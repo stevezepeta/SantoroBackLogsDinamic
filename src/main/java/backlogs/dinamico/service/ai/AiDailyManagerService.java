@@ -50,12 +50,34 @@ public class AiDailyManagerService {
     private static final String F_MSG     = "message";
 
     public DailyManagerSummaryDto buildManagerSummary(ObjectId tenantId, int days, String tz, Instant from, Instant to) {
-        ZoneId zone = safeZone(tz);
+        return buildManagerSummary(tenantId, days, tz, from, to, null, null);
+    }
 
-        // Ultimo N dias completos
+    /**
+     * Overload con filtro de sistema — usado por Eva cuando el usuario
+     * tiene sistemas restringidos (SYSTEM_MANAGER, VIEWER con allowedSystems).
+     *
+     * @param systemFilter   Sistema específico a resumir (ej: "TRUSTVALUE")
+     * @param allowedSystems Lista de sistemas que el usuario puede ver.
+     *                       Si es null o vacío y systemFilter es null → resumen global.
+     */
+    public DailyManagerSummaryDto buildManagerSummary(ObjectId tenantId, int days, String tz,
+                                                      Instant from, Instant to,
+                                                      String systemFilter,
+                                                      List<String> allowedSystems) {
+        ZoneId zone = safeZone(tz);
         TimeRange r = lastNDaysComplete(zone, days, from, to);
 
-        DailySummaryDto daily = dailySummaryService.buildDailySummary(tenantId, r.days, zone.getId(), r.from, r.to);
+        // Resolver qué sistema usar para el resumen
+        String effectiveSystem = systemFilter;
+        if (!StringUtils.hasText(effectiveSystem)
+                && allowedSystems != null && !allowedSystems.isEmpty()) {
+            effectiveSystem = allowedSystems.get(0);
+        }
+
+        DailySummaryDto daily = dailySummaryService.buildDailySummary(
+                tenantId, r.days, zone.getId(), r.from, r.to, effectiveSystem
+        );
         SummaryInsightsDto insights = summaryInsightsService.fromDaily(tenantId, daily);
 
         DailyManagerSummaryDto out = new DailyManagerSummaryDto();
@@ -79,28 +101,42 @@ public class AiDailyManagerService {
         out.topOutcomeRange = safeList(insights.topOutcomeRange);
         out.topErrorsRange = safeListErrors(insights.topErrorsRange);
 
-        // Calculamos topErrorsRange
+        // ── Filtrar topSystemsRange si el usuario tiene sistemas restringidos ──
+        if (allowedSystems != null && !allowedSystems.isEmpty()) {
+            final List<String> allowed = allowedSystems;
+            out.topSystemsRange = out.topSystemsRange.stream()
+                    .filter(s -> s != null && allowed.contains(s.name))
+                    .toList();
+
+            // Recalcular total solo con los sistemas permitidos
+            out.total = out.topSystemsRange.stream().mapToLong(s -> s.count).sum();
+        }
+
+        // topErrorsRange filtrado por sistema
         if (out.topErrorsRange == null || out.topErrorsRange.isEmpty()) {
-            String topSys = firstTopName(out.topSystemsRange);
-            out.topErrorsRange = aggregateTopErrorRange(tenantId,
-                    r.from,
-                    r.to,
-                    topSys,
-                    5);
+            String topSys = StringUtils.hasText(effectiveSystem)
+                    ? effectiveSystem
+                    : firstTopName(out.topSystemsRange);
+            out.topErrorsRange = aggregateTopErrorRange(tenantId, r.from, r.to, topSys, 5);
         }
 
         out.executiveSummary = new ArrayList<>();
         out.risks = new ArrayList<>();
         out.actions = new ArrayList<>();
 
-        // -------- Executive bullets (5 max) --------
-        out.executiveSummary.add("Eventos en el periodo: " + out.total + " (errorRate: " + pct(out.errorRate) + ").");
+        // ── Executive bullets ─────────────────────────────────────────────────
+        String scopeLabel = StringUtils.hasText(effectiveSystem) ? effectiveSystem : "todos los sistemas";
+        out.executiveSummary.add("Eventos en " + scopeLabel + ": " + out.total
+                + " (errorRate: " + pct(out.errorRate) + ").");
 
-        var topSys = firstTopName(out.topSystemsRange);
-        if (topSys != null) out.executiveSummary.add("Sistema principal: " + topSys + " (" + out.topSystemsRange.get(0).count + ").");
+        if (!out.topSystemsRange.isEmpty()) {
+            var topS = out.topSystemsRange.get(0);
+            out.executiveSummary.add("Sistema principal: " + topS.name + " (" + topS.count + ").");
+        }
 
         var topErr = firstTopError(out.topErrorsRange);
-        if (topErr != null) out.executiveSummary.add("Error más frecuente: " + snippet(topErr.key, 90) + " (" + topErr.count + ").");
+        if (topErr != null)
+            out.executiveSummary.add("Error más frecuente: " + snippet(topErr.key, 90) + " (" + topErr.count + ").");
 
         if ("CRIT".equalsIgnoreCase(out.status)) {
             out.risks.add("Riesgo ALTO: indicadores críticos en el periodo (revisar inmediatamente).");
@@ -112,16 +148,14 @@ public class AiDailyManagerService {
             out.actions.add("Mantener monitoreo. Revisar tendencias si aumenta FAILURE/REJECTED.");
         }
 
-        // Sugerir filtros “gerenciales” (para abrir dashboard)
         Map<String, Object> filters = new LinkedHashMap<>();
-        if (topSys != null) filters.put("system", topSys);
+        if (StringUtils.hasText(effectiveSystem)) filters.put("system", effectiveSystem);
         filters.put("from", out.from);
         filters.put("to", out.to);
         out.suggestedFilters = filters;
 
-        // Limitar bullets para no “spamear”
         out.executiveSummary = clamp(out.executiveSummary, 5);
-        out.risks = clamp(out.risks, 5);
+        out.risks  = clamp(out.risks, 5);
         out.actions = clamp(out.actions, 5);
 
         return out;

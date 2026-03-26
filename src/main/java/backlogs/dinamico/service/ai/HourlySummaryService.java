@@ -59,6 +59,15 @@ public class HourlySummaryService {
     private static final String F_MSG_KEY = "messageKey";
 
     public HourlySummaryDto buildHourlySummary(ObjectId tenantId, int hours, String tz, Instant from, Instant to) {
+        return buildHourlySummary(tenantId, hours, tz, from, to, null);
+    }
+
+    /**
+     * Overload con filtro de sistema — usado por Eva cuando el usuario
+     * tiene sistemas restringidos (SYSTEM_MANAGER, VIEWER con allowedSystems).
+     */
+    public HourlySummaryDto buildHourlySummary(ObjectId tenantId, int hours, String tz,
+                                               Instant from, Instant to, String system) {
 
         int safeHours = sanitizeHours(hours);
         ZoneId zone = safeZone(tz);
@@ -89,7 +98,7 @@ public class HourlySummaryService {
         Instant rangeTo = endExclusiveZdt.toInstant();
 
         // 1) Totales por hora + severities
-        List<Document> totals = aggregateTotalsByHour(tenantId, rangeFrom, rangeTo, zone.getId());
+        List<Document> totals = aggregateTotalsByHour(tenantId, rangeFrom, rangeTo, zone.getId(), system);
 
         // fallback si sale vacío: tomar último eventTime real del tenant
         if (totals.isEmpty()) {
@@ -102,7 +111,7 @@ public class HourlySummaryService {
                 rangeFrom = startInclusiveZdt.toInstant();
                 rangeTo = endExclusiveZdt.toInstant();
 
-                totals = aggregateTotalsByHour(tenantId, rangeFrom, rangeTo, zone.getId());
+                totals = aggregateTotalsByHour(tenantId, rangeFrom, rangeTo, zone.getId(), system);
             }
         }
 
@@ -116,19 +125,19 @@ public class HourlySummaryService {
 
         // 2) Tops por hora
         Map<Date, List<HourlySummaryDto.TopItem>> topSystems =
-                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_SYS, 5);
+                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_SYS, 5, system);
 
         Map<Date, List<HourlySummaryDto.TopItem>> topTypes =
-                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_TYPE, 5);
+                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_TYPE, 5, system);
 
         Map<Date, List<HourlySummaryDto.TopItem>> topStatus =
-                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_STATUS, 5);
+                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_STATUS, 5, system);
 
         Map<Date, List<HourlySummaryDto.TopItem>> topOutcome =
-                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_OUT, 5);
+                aggregateTopByHour(tenantId, rangeFrom, rangeTo, zone.getId(), F_OUT, 5, system);
 
         Map<Date, List<HourlySummaryDto.TopError>> topErrors =
-                aggregateTopErrorsByHour(tenantId, rangeFrom, rangeTo, zone.getId(), 5);
+                aggregateTopErrorsByHour(tenantId, rangeFrom, rangeTo, zone.getId(), 5, system);
 
         // 3) Construir todas las horas del rango (para buckets vacíos)
         List<Date> hourStarts = buildHourStarts(startInclusiveZdt, endExclusiveZdt);
@@ -186,6 +195,10 @@ public class HourlySummaryService {
     // ===================== AGGREGATIONS =====================
 
     private List<Document> aggregateTotalsByHour(ObjectId tenantId, Instant from, Instant to, String tz) {
+        return aggregateTotalsByHour(tenantId, from, to, tz, null);
+    }
+
+    private List<Document> aggregateTotalsByHour(ObjectId tenantId, Instant from, Instant to, String tz, String system) {
 
         // {$arrayToObject: {$ifNull: ["$sevPairs", []]}}
         var severitiesExpr = (org.springframework.data.mongodb.core.aggregation.AggregationExpression)
@@ -200,10 +213,18 @@ public class HourlySummaryService {
                 ));
 
         Aggregation agg = newAggregation(
-                match(new Criteria()
-                        .and(F_TENANT).is(tenantId)
-                        .and(F_TIME).gte(Date.from(from)).lt(Date.from(to))
-                        .and(F_SEV).exists(true).ne(null).ne("")
+                match(StringUtils.hasText(system)
+                                ? new Criteria().andOperator(
+                                Criteria.where(F_TENANT).is(tenantId),
+                                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                                Criteria.where(F_SEV).exists(true).ne(null).ne(""),
+                                Criteria.where(F_SYS).is(system.trim())
+                        )
+                                : new Criteria().andOperator(
+                                Criteria.where(F_TENANT).is(tenantId),
+                                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                                Criteria.where(F_SEV).exists(true).ne(null).ne("")
+                        )
                 ),
 
                 addFields().addFieldWithValue("hour",
@@ -245,11 +266,40 @@ public class HourlySummaryService {
     private Map<Date, List<HourlySummaryDto.TopItem>> aggregateTopByHour(
             ObjectId tenantId, Instant from, Instant to, String tz, String field, int limit
     ) {
+        return aggregateTopByHour(tenantId, from, to, tz, field, limit, null);
+    }
+
+    private Map<Date, List<HourlySummaryDto.TopItem>> aggregateTopByHour(
+            ObjectId tenantId, Instant from, Instant to, String tz, String field, int limit, String system
+    ) {
+        // Criterio base — siempre aplica
+        Criteria timeCriteria = Criteria.where(F_TENANT).is(tenantId)
+                .and(F_TIME).gte(Date.from(from)).lt(Date.from(to));
+
+        // Criterio del campo a agregar — evitar duplicar si field == F_SYS
+        Criteria fieldCriteria = Criteria.where(field).exists(true).ne(null).ne("");
+
+        // Criterio de sistema — solo si se especificó Y el campo no es ya "system"
+        Criteria baseCriteria;
+        if (StringUtils.hasText(system) && !F_SYS.equals(field)) {
+            // field != "system" → podemos agregar system sin conflicto
+            baseCriteria = new Criteria().andOperator(
+                    timeCriteria,
+                    fieldCriteria,
+                    Criteria.where(F_SYS).is(system.trim())
+            );
+        } else if (StringUtils.hasText(system) && F_SYS.equals(field)) {
+            // field == "system" → el filtro IS el propio campo, no duplicar
+            baseCriteria = new Criteria().andOperator(
+                    timeCriteria,
+                    Criteria.where(F_SYS).is(system.trim())
+            );
+        } else {
+            baseCriteria = new Criteria().andOperator(timeCriteria, fieldCriteria);
+        }
+
         Aggregation agg = newAggregation(
-                match(Criteria.where(F_TENANT).is(tenantId)
-                        .and(F_TIME).gte(Date.from(from)).lt(Date.from(to))
-                        .and(field).exists(true).ne(null).ne("")
-                ),
+                match(baseCriteria),
 
                 addFields().addFieldWithValue("hour",
                         new Document("$dateTrunc",
@@ -306,14 +356,31 @@ public class HourlySummaryService {
     private Map<Date, List<HourlySummaryDto.TopError>> aggregateTopErrorsByHour(
             ObjectId tenantId, Instant from, Instant to, String tz, int limit
     ) {
+        return aggregateTopErrorsByHour(tenantId, from, to, tz, limit, null);
+    }
+
+    private Map<Date, List<HourlySummaryDto.TopError>> aggregateTopErrorsByHour(
+            ObjectId tenantId, Instant from, Instant to, String tz, int limit, String system
+    ) {
         int safeLimit = Math.min(Math.max(limit, 1), 20);
 
+        Criteria errorCriteria = StringUtils.hasText(system)
+                ? new Criteria().andOperator(
+                Criteria.where(F_TENANT).is(tenantId),
+                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                Criteria.where(F_IS_ERROR).is(true),
+                Criteria.where(F_MSG_KEY).exists(true).ne(null).ne(""),
+                Criteria.where(F_SYS).is(system.trim())
+        )
+                : new Criteria().andOperator(
+                Criteria.where(F_TENANT).is(tenantId),
+                Criteria.where(F_TIME).gte(Date.from(from)).lt(Date.from(to)),
+                Criteria.where(F_IS_ERROR).is(true),
+                Criteria.where(F_MSG_KEY).exists(true).ne(null).ne("")
+        );
+
         Aggregation agg = newAggregation(
-                match(Criteria.where(F_TENANT).is(tenantId)
-                        .and(F_TIME).gte(Date.from(from)).lt(Date.from(to))
-                        .and(F_IS_ERROR).is(true)
-                        .and(F_MSG_KEY).exists(true).ne(null).ne("")
-                ),
+                match(errorCriteria),
 
                 addFields().addFieldWithValue("hour",
                         new Document("$dateTrunc",

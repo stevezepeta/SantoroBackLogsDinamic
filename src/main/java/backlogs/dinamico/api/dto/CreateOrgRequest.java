@@ -28,8 +28,8 @@ public class CreateOrgRequest {
 
     private Integer retentionDays;
 
-    @NotBlank(message = "verificationToken es obligatorio")
-    private String verificationToken;
+//    @NotBlank(message = "verificationToken es obligatorio")
+//    private String verificationToken;
 
     // ----------- SUPER ADMIN ---------------
     @NotBlank
