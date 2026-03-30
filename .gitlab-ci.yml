@@ -43,10 +43,8 @@ build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
 
-  # Ejecutar en todas las ramas
+  # Solo ejecutar en development
   only:
-    - main
-    - master
     - development
 
   before_script:
@@ -74,10 +72,8 @@ test:
   stage: test
   image: maven:3.9-eclipse-temurin-17
 
-  # Ejecutar en todas las ramas
+  # Solo ejecutar en development
   only:
-    - main
-    - master
     - development
 
   dependencies:
@@ -105,10 +101,9 @@ package:
   stage: package
   image: maven:3.9-eclipse-temurin-17
 
-  # Solo ejecutar en ramas principales
+  # Solo ejecutar en development
   only:
-    - main
-    - master
+    - development
 
   dependencies:
     - build
@@ -142,10 +137,9 @@ deploy:
   stage: deploy
   image: amazon/aws-cli:latest
 
-  # Solo ejecutar en ramas principales
+  # Solo ejecutar en development
   only:
-    - main
-    - master
+    - development
 
   dependencies: []
 
