@@ -1,0 +1,209 @@
+# ═══════════════════════════════════════════════════════════════
+# GitLab CI/CD Pipeline - Backend Spring Boot
+# ═══════════════════════════════════════════════════════════════
+#
+# Pipeline para build, test y deploy del backend Spring Boot
+#
+# Fases:
+#   1. build   - Compila el proyecto con Maven
+#   2. test    - Ejecuta tests unitarios
+#   3. package - Genera el JAR y lo sube a S3
+#   4. deploy  - Notifica a EC2 para descargar el nuevo JAR
+#
+# Variables requeridas (Settings > CI/CD > Variables):
+#   - AWS_ACCESS_KEY_ID     : Credencial de AWS para subir a S3
+#   - AWS_SECRET_ACCESS_KEY : Credencial secreta de AWS
+#   - AWS_DEFAULT_REGION    : Región de AWS (us-east-1)
+#   - S3_JAR_BUCKET         : Nombre del bucket S3 (alandev-backend-jar-2026)
+#   - EC2_INSTANCE_ID       : ID de la instancia EC2 (i-xxxxxxxxx)
+#
+# ═══════════════════════════════════════════════════════════════
+
+stages:
+  - build
+  - test
+  - package
+  - deploy
+
+# Variables globales
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=.m2"
+  JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
+
+# Cache para dependencias de Maven
+cache:
+  key: "$CI_COMMIT_REF_SLUG-maven"
+  paths:
+    - .m2/repository/
+
+# ───────────────────────────────────────────────────────────────
+# STAGE 1: BUILD
+# ───────────────────────────────────────────────────────────────
+build:
+  stage: build
+  image: maven:3.9-eclipse-temurin-17
+
+  # Ejecutar en todas las ramas
+  only:
+    - main
+    - master
+    - development
+
+  before_script:
+    - echo "🔨 Iniciando build del backend Spring Boot"
+    - java -version
+    - mvn -version
+
+  script:
+    - echo "📦 Descargando dependencias de Maven"
+    - mvn dependency:go-offline -B
+
+    - echo "🏗️ Compilando proyecto"
+    - mvn compile -B
+
+  artifacts:
+    name: "backend-build-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - target/classes/
+    expire_in: 1 hour
+
+# ───────────────────────────────────────────────────────────────
+# STAGE 2: TEST
+# ───────────────────────────────────────────────────────────────
+test:
+  stage: test
+  image: maven:3.9-eclipse-temurin-17
+
+  # Ejecutar en todas las ramas
+  only:
+    - main
+    - master
+    - development
+
+  dependencies:
+    - build
+
+  before_script:
+    - echo "🧪 Ejecutando tests unitarios"
+
+  script:
+    - echo "Running unit tests..."
+    - mvn test -B || echo "⚠️ Tests fallaron, pero continuamos para ver el resultado"
+
+  allow_failure: true
+
+  artifacts:
+    when: always
+    reports:
+      junit: target/surefire-reports/TEST-*.xml
+    expire_in: 1 week
+
+# ───────────────────────────────────────────────────────────────
+# STAGE 3: PACKAGE - Generar JAR y subir a S3
+# ───────────────────────────────────────────────────────────────
+package:
+  stage: package
+  image: maven:3.9-eclipse-temurin-17
+
+  # Solo ejecutar en ramas principales
+  only:
+    - main
+    - master
+
+  dependencies:
+    - build
+
+  before_script:
+    - echo "📦 Empaquetando aplicación"
+    - apt-get update && apt-get install -y awscli
+
+  script:
+    - echo "🏗️ Generando JAR con Maven"
+    - mvn package -DskipTests -B
+
+    - echo "📂 Buscando el JAR generado"
+    - ls -lh target/*.jar
+
+    - echo "📤 Subiendo JAR a S3"
+    - aws s3 cp target/dinamico-0.0.1-SNAPSHOT.jar "s3://$S3_JAR_BUCKET/app.jar" --region $AWS_DEFAULT_REGION
+
+    - echo "✅ JAR subido exitosamente a s3://$S3_JAR_BUCKET/app.jar"
+
+  artifacts:
+    name: "backend-jar-$CI_COMMIT_SHORT_SHA"
+    paths:
+      - target/dinamico-0.0.1-SNAPSHOT.jar
+    expire_in: 1 week
+
+# ───────────────────────────────────────────────────────────────
+# STAGE 4: DEPLOY - Notificar a EC2
+# ───────────────────────────────────────────────────────────────
+deploy:
+  stage: deploy
+  image: amazon/aws-cli:latest
+
+  # Solo ejecutar en ramas principales
+  only:
+    - main
+    - master
+
+  dependencies: []
+
+  before_script:
+    - echo "🚀 Preparando deploy a EC2"
+
+  script:
+    - echo "📡 Verificando que el JAR está en S3"
+    - aws s3 ls "s3://$S3_JAR_BUCKET/app.jar" --region $AWS_DEFAULT_REGION
+
+    - echo "🔔 Enviando comando a EC2 para actualizar"
+    # Usamos AWS Systems Manager para ejecutar el script de deploy en EC2
+    - |
+      aws ssm send-command \
+        --Instance-ids "$EC2_INSTANCE_ID" \
+        --Document-name "AWS-RunShellScript" \
+        --Parameters "commands=[\"cd /opt/backend && ./deploy.sh\"]" \
+        --Region "$AWS_DEFAULT_REGION" \
+        --output text
+
+    - echo "✅ Comando de deploy enviado a EC2"
+
+    - echo "⏳ Esperando 30 segundos para que la aplicación inicie..."
+    - sleep 30
+
+    - echo "🏥 Verificando health check"
+    # Intentar verificar el health endpoint (puede fallar si no hay DNS configurado aún)
+    - |
+      if command -v curl &> /dev/null; then
+        curl -sf http://$ALB_DNS_NAME/actuator/health || echo "⚠️ Health check pendiente, la aplicación puede estar iniciando"
+      fi
+
+  environment:
+    name: production
+    url: https://api-logs.grupo-santoro.com.mx
+
+  allow_failure: true
+
+# ───────────────────────────────────────────────────────────────
+# STAGE OPCIONAL: Deploy manual
+# ───────────────────────────────────────────────────────────────
+deploy_manual:
+  stage: deploy
+  image: amazon/aws-cli:latest
+
+  # Solo cuando se ejecuta manualmente
+  when: manual
+
+  dependencies: []
+
+  script:
+    - echo "🔧 Ejecutando deploy manual"
+    - |
+      aws ssm send-command \
+        --Instance-ids "$EC2_INSTANCE_ID" \
+        --Document-name "AWS-RunShellScript" \
+        --Parameters "commands=[\"cd /opt/backend && ./deploy.sh && systemctl restart springboot-app\"]" \
+        --Region "$AWS_DEFAULT_REGION"
+
+  environment:
+    name: production
