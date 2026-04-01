@@ -1,34 +1,15 @@
 # ═══════════════════════════════════════════════════════════════
 # GitLab CI/CD Pipeline - Backend Spring Boot a AWS S3 + EC2
 # ═══════════════════════════════════════════════════════════════
-#
-# Pipeline para build y deploy del backend Spring Boot a AWS
-#
-# Fases:
-#   1. build   - Compila el proyecto con Maven y genera el JAR
-#   2. deploy  - Sube JAR a S3 y despliega a EC2 via SSH
-#
-# Variables requeridas (Settings > CI/CD > Variables):
-#   - AWS_ACCESS_KEY_ID          : Credencial de AWS
-#   - AWS_SECRET_ACCESS_KEY      : Credencial secreta de AWS
-#   - AWS_DEFAULT_REGION         : Región de AWS (us-east-1)
-#   - S3_BACKEND_BUCKET          : Bucket S3 del backend (alandev-backend-jar-2026)
-#   - EC2_HOST                   : IP o dominio de EC2 (52.3.230.125)
-#   - EC2_USER                   : Usuario SSH (ubuntu)
-#   - EC2_PRIVATE_KEY            : Private key para SSH a EC2
-#
-# ═══════════════════════════════════════════════════════════════
 
 stages:
   - build
   - deploy
 
-# Variables globales
 variables:
   MAVEN_OPTS: "-Dmaven.repo.local=.m2/repository"
   JAVA_HOME: "/usr/lib/jvm/java-17-openjdk-amd64"
 
-# Cache para Maven
 cache:
   key:
     files:
@@ -37,27 +18,21 @@ cache:
     - .m2/repository/
     - target/
 
-# ───────────────────────────────────────────────────────────────
-# STAGE 1: BUILD con Maven
-# ───────────────────────────────────────────────────────────────
 build:
   stage: build
   image: maven:3.9-eclipse-temurin-17
-
-  # Ejecutar en las ramas indicadas
   only:
     - development
 
   before_script:
-    - echo "📦 Checkout de código"
+    - echo "Checkout de codigo"
     - java -version
     - mvn --version
 
   script:
-    - echo "🔧 Compilando proyecto con Maven..."
+    - echo "Compilando proyecto con Maven"
     - mvn clean package -DskipTests
-
-    - echo "✅ Build completado exitosamente"
+    - echo "Build completado exitosamente"
     - ls -la target/*.jar
 
   artifacts:
@@ -66,58 +41,36 @@ build:
       - target/*.jar
     expire_in: 1 hour
 
-# ───────────────────────────────────────────────────────────────
-# STAGE 2: DEPLOY a S3 + EC2
-# ───────────────────────────────────────────────────────────────
 deploy:
   stage: deploy
-  image: amazon/aws-cli:latest
-
-  # Ejecutar en las ramas indicadas
+  image: ubuntu:latest
   only:
     - development
-
   dependencies:
     - build
 
   before_script:
-    - echo "📡 Preparando despliegue a EC2"
-    - echo "📍 Bucket S3: $S3_BACKEND_BUCKET"
-    - echo "🖥️ EC2 Host: $EC2_HOST"
-    - 'which ssh-agent || ( apt-get update -y && apt-get install -y openssh-client )'
+    - apt-get update -y
+    - apt-get install -y curl unzip openssh-client
+    - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    - unzip awscliv2.zip
+    - ./aws/install
+    - rm -rf awscliv2.zip aws
     - eval $(ssh-agent -s)
-    - echo "$EC2_PRIVATE_KEY" | tr -d '\r' | ssh-add -
+    - echo "$EC2_PRIVATE_KEY" | tr -d '\r' > /tmp/ec2_key
+    - chmod 600 /tmp/ec2_key
+    - ssh-add /tmp/ec2_key
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+    - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
     - chmod 644 ~/.ssh/known_hosts
 
   script:
-    # Subir JAR a S3
-    - echo "🚀 Subiendo JAR a S3..."
+    - echo "Subiendo JAR a S3"
     - aws s3 cp target/*.jar "s3://$S3_BACKEND_BUCKET/app.jar" --region $AWS_DEFAULT_REGION
-
-    - echo "✅ JAR subido exitosamente a S3"
-
-    # Conectar a EC2 y desplegar
-    - echo "🔌 Conectando a EC2 para desplegar..."
-    - |
-      ssh -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" << 'EOF'
-        echo "📥 Descargando JAR desde S3..."
-        aws s3 cp s3://$S3_BACKEND_BUCKET/app.jar /tmp/app.jar --region $AWS_DEFAULT_REGION
-
-        echo "🔄 Moviendo JAR a /opt/backend/"
-        sudo mv /tmp/app.jar /opt/backend/app.jar
-
-        echo "🔄 Reiniciando servicio Spring Boot..."
-        sudo systemctl daemon-reload
-        sudo systemctl restart springboot-app
-
-        echo "✅ Deploy completado exitosamente"
-        sudo systemctl status springboot-app --no-pager
-      EOF
-
-    - echo "✅ Deploy a EC2 completado"
+    - echo "JAR subido exitosamente a S3"
+    - echo "Conectando a EC2 para desplegar"
+    - ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key "$EC2_USER@$EC2_HOST" "aws s3 cp s3://$S3_BACKEND_BUCKET/app.jar /tmp/app.jar --region $AWS_DEFAULT_REGION && sudo mv /tmp/app.jar /opt/backend/app.jar && sudo systemctl daemon-reload && sudo systemctl restart springboot-app && echo 'Deploy completado exitosamente'"
 
   environment:
     name: production
