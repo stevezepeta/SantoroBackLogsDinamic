@@ -1,0 +1,45 @@
+package backlogs.dinamico.service.email;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Profile;
+import org.springframework.stereotype.Service;
+
+/**
+ * Implementación de desarrollo — imprime el OTP en el log.
+ * Activa cuando NO hay perfil sendgrid/ses.
+ *
+ * Para cambiar a producción, añade en application.properties:
+ *   spring.profiles.active=sendgrid
+ * y crea SendGridEmailSender con @Profile("sendgrid").
+ */
+@Slf4j
+@Service
+@Profile("!mail & !sendgrid & !ses")
+public class ConsoleEmailSender implements EmailSenderPort {
+
+    @Override
+    public void sendOtp(String toEmail, String otp, int ttlMinutes) {
+        log.info("""
+                ╔══════════════════════════════════════════╗
+                ║         EMAIL VERIFICATION OTP           ║
+                ║  To      : {}
+                ║  OTP     : {}
+                ║  Expires : {} minutos
+                ╚══════════════════════════════════════════╝
+                """, toEmail, otp, ttlMinutes);
+    }
+
+    @Override
+    public void sendInviteOtp(String toEmail, String otp, int ttlHours, String orgName) {
+        log.info("""
+                ╔══════════════════════════════════════════╗
+                ║           INVITE OTP CODE                ║
+                ║  To      : {}
+                ║  Org     : {}
+                ║  OTP     : {}
+                ║  Usar en : POST /api/auth/accept-invite  ║
+                ║  Expires : {} horas
+                ╚══════════════════════════════════════════╝
+                """, toEmail, orgName, otp, ttlHours);
+    }
+}

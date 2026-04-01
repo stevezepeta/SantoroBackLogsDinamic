@@ -1,0 +1,428 @@
+/* =========================================================
+   Swagger UI Theme — Santoro (Black + Orange)
+   Neutral, formal, moderno. Color solo donde aporta.
+   ========================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root{
+  /* Base Santoro */
+  --bg: #0b0c0f;
+  --bg2:#0f1117;
+
+  /* Superficies */
+  --card: rgba(255,255,255,.04);
+  --card2: rgba(255,255,255,.06);
+  --border: rgba(255,255,255,.10);
+  --border2: rgba(255,255,255,.14);
+
+  /* Texto */
+  --text: rgba(255,255,255,.92);
+  --muted: rgba(255,255,255,.64);
+  --muted2: rgba(255,255,255,.48);
+
+  /* Santoro accent */
+  --accent: #ff7a18;   /* naranja */
+  --accent2:#ff9a4a;   /* naranja claro */
+  --danger: #ef4444;   /* rojo */
+  --warn:   #f59e0b;   /* ámbar */
+
+  /* HTTP (discretos) */
+  --get:  #60a5fa; /* azul suave */
+  --post: #34d399; /* verde suave */
+  --put:  #fbbf24; /* ámbar suave */
+  --del:  #fb7185; /* rosa/rojo suave */
+
+  --shadow: 0 16px 48px rgba(0,0,0,.50);
+  --shadow2: 0 10px 30px rgba(0,0,0,.35);
+  --radius: 18px;
+  --radius2: 14px;
+}
+
+html, body{
+  background:
+    radial-gradient(900px 500px at 18% 12%, rgba(255,122,24,.10), transparent 55%),
+    radial-gradient(900px 500px at 85% 22%, rgba(255,255,255,.05), transparent 60%),
+    linear-gradient(180deg, var(--bg), var(--bg2)) !important;
+  color: var(--text) !important;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.swagger-ui .wrapper{
+  max-width: 1240px !important;
+  margin: 0 auto !important;
+  padding: 18px 18px 46px !important;
+}
+
+/* =============== TOPBAR =============== */
+.swagger-ui .topbar{
+  background: rgba(10,12,16,.72) !important;
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--border) !important;
+  padding: 10px 0 !important;
+}
+
+.swagger-ui .topbar .link img{
+  display: none !important; /* si quieres mostrar el logo default, comenta esta línea */
+}
+
+.swagger-ui .topbar-wrapper{
+  display:flex;
+  align-items:center;
+  gap: 14px;
+}
+
+.swagger-ui .topbar-wrapper::before{
+  content:"Santoro • Backlogs Docs";
+  display:inline-flex;
+  align-items:center;
+  padding: 8px 12px;
+  border: 1px solid rgba(255,122,24,.35);
+  border-radius: 999px;
+  background: rgba(255,122,24,.08);
+  color: var(--text);
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+.swagger-ui .topbar select{
+  background: rgba(255,255,255,.06) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 999px !important;
+  padding: 8px 12px !important;
+  outline: none !important;
+}
+
+/* =============== INFO (HEADER) =============== */
+.swagger-ui .info{
+  background: linear-gradient(135deg, rgba(255,122,24,.10), rgba(255,255,255,.04)) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 22px 22px 16px !important;
+  box-shadow: var(--shadow);
+  margin: 18px 0 18px !important;
+}
+
+.swagger-ui .info .title{
+  color: var(--text) !important;
+  font-weight: 900 !important;
+  letter-spacing: -.4px;
+}
+
+.swagger-ui .info p,
+.swagger-ui .info li{
+  color: var(--muted) !important;
+  font-size: 14px !important;
+  line-height: 1.6 !important;
+}
+
+.swagger-ui .info a{
+  color: var(--accent2) !important;
+  text-decoration: none !important;
+}
+.swagger-ui .info a:hover{
+  text-decoration: underline !important;
+}
+
+/* =============== SERVERS / AUTHORIZE =============== */
+.swagger-ui .scheme-container{
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 10px 0 0 !important;
+  margin: 0 0 16px !important;
+}
+
+.swagger-ui .scheme-container .schemes{
+  background: rgba(255,255,255,.03) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 14px !important;
+  box-shadow: var(--shadow2);
+}
+
+.swagger-ui .scheme-container select{
+  background: rgba(255,255,255,.05) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 999px !important;
+  padding: 8px 12px !important;
+}
+
+/* Botón Authorize (naranja) */
+.swagger-ui .btn.authorize{
+  background: rgba(255,122,24,.14) !important;
+  border: 1px solid rgba(255,122,24,.55) !important;
+  border-radius: 999px !important;
+  color: var(--text) !important;
+  padding: 10px 14px !important;
+  font-weight: 800 !important;
+  box-shadow: 0 10px 26px rgba(0,0,0,.25);
+}
+.swagger-ui .btn.authorize:hover{
+  background: rgba(255,122,24,.20) !important;
+  transform: translateY(-1px);
+}
+
+/* =============== FILTER =============== */
+.swagger-ui .filter-container{
+  margin: 10px 0 20px !important;
+}
+.swagger-ui .filter-container input{
+  width: 100% !important;
+  background: rgba(255,255,255,.04) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 999px !important;
+  padding: 12px 14px !important;
+  outline: none !important;
+}
+.swagger-ui .filter-container input::placeholder{
+  color: rgba(255,255,255,.42) !important;
+}
+
+/* =============== TAG HEADERS =============== */
+.swagger-ui .opblock-tag{
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  margin: 18px 0 14px !important;
+  background: rgba(255,255,255,.03) !important;
+  box-shadow: var(--shadow2);
+  padding: 16px !important;
+}
+
+.swagger-ui .opblock-tag{
+  color: var(--text) !important;
+  font-size: 20px !important;
+  font-weight: 900 !important;
+  letter-spacing: -.2px;
+}
+
+.swagger-ui .opblock-tag small{
+  color: var(--muted2) !important;
+  font-weight: 600 !important;
+}
+
+/* =============== OPBLOCK (ENDPOINT CARD) =============== */
+.swagger-ui .opblock{
+  border-radius: var(--radius) !important;
+  border: 1px solid var(--border) !important;
+  box-shadow: var(--shadow2) !important;
+  overflow: hidden !important;
+  margin: 12px 0 !important;
+  background: rgba(255,255,255,.02) !important;
+}
+
+.swagger-ui .opblock-summary{
+  padding: 12px 14px !important;
+  align-items: center !important;
+}
+
+.swagger-ui .opblock-summary-path{
+  color: var(--text) !important;
+  font-weight: 900 !important;
+}
+
+.swagger-ui .opblock-summary-description{
+  color: var(--muted) !important;
+  font-weight: 600 !important;
+}
+
+/* Método pill (discreto, elegante) */
+.swagger-ui .opblock-summary-method{
+  border-radius: 999px !important;
+  padding: 6px 12px !important;
+  font-weight: 900 !important;
+  letter-spacing: .9px !important;
+  font-size: 12px !important;
+  min-width: 82px;
+  border: 1px solid var(--border2) !important;
+}
+
+/* Fondo sutil por método (no confunde) */
+.swagger-ui .opblock.opblock-get .opblock-summary{
+  background: linear-gradient(90deg, rgba(96,165,250,.10), rgba(255,255,255,0)) !important;
+}
+.swagger-ui .opblock.opblock-post .opblock-summary{
+  background: linear-gradient(90deg, rgba(52,211,153,.10), rgba(255,255,255,0)) !important;
+}
+.swagger-ui .opblock.opblock-put .opblock-summary{
+  background: linear-gradient(90deg, rgba(251,191,36,.10), rgba(255,255,255,0)) !important;
+}
+.swagger-ui .opblock.opblock-delete .opblock-summary{
+  background: linear-gradient(90deg, rgba(251,113,133,.10), rgba(255,255,255,0)) !important;
+}
+
+/* Pill colores suaves */
+.swagger-ui .opblock.opblock-get .opblock-summary-method{ background: rgba(96,165,250,.16) !important; border-color: rgba(96,165,250,.35) !important; }
+.swagger-ui .opblock.opblock-post .opblock-summary-method{ background: rgba(52,211,153,.16) !important; border-color: rgba(52,211,153,.35) !important; }
+.swagger-ui .opblock.opblock-put .opblock-summary-method{ background: rgba(251,191,36,.16) !important; border-color: rgba(251,191,36,.35) !important; }
+.swagger-ui .opblock.opblock-delete .opblock-summary-method{ background: rgba(251,113,133,.16) !important; border-color: rgba(251,113,133,.35) !important; }
+
+/* Body interno */
+.swagger-ui .opblock-body{
+  padding: 12px 14px 16px !important;
+}
+
+/* =============== TABLES / PARAMS =============== */
+.swagger-ui table{
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  width: 100%;
+}
+
+.swagger-ui table thead tr th{
+  color: var(--muted2) !important;
+  font-weight: 800 !important;
+  border-bottom: 1px solid var(--border) !important;
+  padding: 10px 8px !important;
+}
+
+.swagger-ui table tbody tr td{
+  color: var(--text) !important;
+  border-bottom: 1px solid rgba(255,255,255,.06) !important;
+  padding: 10px 8px !important;
+}
+
+.swagger-ui .parameters-col_description p,
+.swagger-ui .parameters-col_description div{
+  color: var(--muted) !important;
+}
+
+/* =============== INPUTS =============== */
+.swagger-ui input[type="text"],
+.swagger-ui input[type="password"],
+.swagger-ui input[type="email"],
+.swagger-ui input[type="number"],
+.swagger-ui textarea,
+.swagger-ui select{
+  background: rgba(255,255,255,.04) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  outline: none !important;
+}
+
+.swagger-ui textarea{
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+  font-size: 13px !important;
+  line-height: 1.5 !important;
+}
+
+/* =============== BUTTONS =============== */
+.swagger-ui .btn{
+  border-radius: 12px !important;
+  border: 1px solid var(--border) !important;
+  background: rgba(255,255,255,.05) !important;
+  color: var(--text) !important;
+  font-weight: 800 !important;
+  box-shadow: none !important;
+}
+
+.swagger-ui .btn:hover{
+  background: rgba(255,255,255,.08) !important;
+  transform: translateY(-1px);
+}
+
+/* Try it out (naranja) */
+.swagger-ui .btn.try-out{
+  background: rgba(255,122,24,.14) !important;
+  border: 1px solid rgba(255,122,24,.55) !important;
+}
+
+/* Execute (naranja un poco más intenso) */
+.swagger-ui .btn.execute{
+  background: rgba(255,122,24,.20) !important;
+  border: 1px solid rgba(255,122,24,.70) !important;
+}
+
+/* Cancel */
+.swagger-ui .btn.cancel{
+  background: rgba(239,68,68,.12) !important;
+  border: 1px solid rgba(239,68,68,.45) !important;
+  color: rgba(255,255,255,.92) !important;
+}
+
+/* =============== CODE BLOCKS =============== */
+.swagger-ui .highlight-code,
+.swagger-ui pre{
+  border-radius: 14px !important;
+  border: 1px solid rgba(255,255,255,.10) !important;
+  background: rgba(0,0,0,.35) !important;
+}
+
+.swagger-ui code,
+.swagger-ui kbd,
+.swagger-ui pre code{
+  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace !important;
+  color: rgba(255,255,255,.92) !important;
+}
+
+/* =============== MODEL / SCHEMA =============== */
+.swagger-ui .model-box{
+  border: 1px solid rgba(255,255,255,.10) !important;
+  border-radius: 14px !important;
+  background: rgba(255,255,255,.04) !important;
+}
+
+.swagger-ui .model-title{
+  color: var(--text) !important;
+  font-weight: 900 !important;
+}
+
+/* =============== MODALS =============== */
+.swagger-ui .modal-ux{
+  background: rgba(0,0,0,.55) !important;
+}
+.swagger-ui .modal-ux .modal-dialog-ux{
+  background: rgba(16,18,24,.92) !important;
+  border: 1px solid rgba(255,255,255,.12) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--shadow);
+}
+.swagger-ui .modal-ux .modal-ux-header{
+  border-bottom: 1px solid rgba(255,255,255,.10) !important;
+}
+
+/* Required indicator */
+.swagger-ui .parameter__name.required:after{
+  color: var(--accent) !important;
+}
+
+/* Responsive */
+@media (max-width: 880px){
+  .swagger-ui .wrapper{ padding: 14px 12px 36px !important; }
+  .swagger-ui .info{ padding: 16px !important; }
+  .swagger-ui .opblock-tag{ padding: 14px !important; }
+}
+
+/* ============================
+   FIX: Spacing en Markdown (Conceptos)
+   Evita que los <code> tipo "chip" se encimen
+   ============================ */
+
+.swagger-ui .markdown,
+.swagger-ui .markdown p,
+.swagger-ui .markdown li {
+  line-height: 1.65 !important;
+}
+
+.swagger-ui .markdown ul {
+  margin-top: 10px !important;
+  padding-left: 18px !important;
+}
+
+.swagger-ui .markdown li {
+  margin: 10px 0 !important;   /* <-- separa bullets */
+}
+
+.swagger-ui .markdown code {
+  display: inline-block !important;  /* <-- clave para que no se monten */
+  vertical-align: middle !important;
+  margin: 0 10px 6px 0 !important;   /* <-- espacio entre chips */
+  white-space: nowrap !important;
+}
+
