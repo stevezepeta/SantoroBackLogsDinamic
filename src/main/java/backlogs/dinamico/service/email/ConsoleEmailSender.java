@@ -48,4 +48,9 @@ public class ConsoleEmailSender implements EmailSenderPort {
     public void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert) {
 
     }
+
+    @Override
+    public void sendAlertWithPdf(String toEmail, String toName, String subject, String bodyHtml, byte[] pdfBytes, String fileName) {
+
+    }
 }

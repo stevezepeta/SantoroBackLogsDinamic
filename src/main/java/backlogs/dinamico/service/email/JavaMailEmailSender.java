@@ -74,6 +74,66 @@ public class JavaMailEmailSender implements EmailSenderPort {
 
     }
 
+    @Override
+    public void sendAlertWithPdf(String toEmail, String toName,
+                                 String subject, String bodyHtml,
+                                 byte[] pdfBytes, String fileName) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromEmail, fromName);
+            helper.setTo(toEmail);
+            helper.setSubject(subject);
+
+            // Body HTML del correo (simple, el detalle está en el PDF)
+            String html = buildAlertEmailWrapper(toName, bodyHtml);
+            helper.setText(html, true);
+
+            // Adjuntar PDF
+            helper.addAttachment(fileName,
+                    new org.springframework.core.io.ByteArrayResource(pdfBytes),
+                    "application/pdf");
+
+            mailSender.send(message);
+            log.info("[JavaMail] Reporte PDF enviado a {}", toEmail);
+        } catch (Exception e) {
+            log.error("[JavaMail] Error enviando PDF a {}: {}", toEmail, e.getMessage());
+            throw new RuntimeException("pdf_email_send_failed: " + e.getMessage());
+        }
+    }
+
+    private String buildAlertEmailWrapper(String toName, String bodyHtml) {
+        String name = (toName != null && !toName.isBlank()) ? toName : "Administrador";
+        return """
+            <!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"></head>
+            <body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f3f4f6">
+            <table width="100%%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding:40px 16px">
+            <table width="520" cellpadding="0" cellspacing="0"
+                   style="background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;overflow:hidden">
+              <tr><td style="background:#111827;padding:20px 28px">
+                <div style="font-size:18px;font-weight:900;color:#fff;letter-spacing:2px">DataLogs</div>
+                <div style="font-size:9px;color:#6b7280;letter-spacing:2px;margin-top:3px">SISTEMA DE GESTIÓN DE LOGS</div>
+              </td></tr>
+              <tr><td style="height:3px;background:linear-gradient(90deg,#334155,#64748b,#334155)"></td></tr>
+              <tr><td style="padding:28px">
+                <p style="font-size:15px;font-weight:700;color:#111827;margin:0 0 12px">Hola, %s</p>
+                %s
+                <p style="font-size:12px;color:#9ca3af;margin:20px 0 0">
+                  El reporte detallado se adjunta como PDF a este correo.
+                </p>
+              </td></tr>
+              <tr><td style="background:#f9fafb;padding:12px 28px;border-top:1px solid #e5e7eb">
+                <p style="font-size:10px;color:#9ca3af;margin:0">
+                  DataLogs · Grupo Santoro · soporte.tecnico@grupo-santoro.com.mx
+                </p>
+              </td></tr>
+            </table>
+            </td></tr></table>
+            </body></html>
+            """.formatted(name, bodyHtml);
+    }
+
     private String buildAlertSubject(AlertEmailDto a) {
         String icon = "CRIT".equalsIgnoreCase(a.status()) ? "🔴" : "🟡";
         return icon + " [DataLogs] Alerta " + a.status() + " — "

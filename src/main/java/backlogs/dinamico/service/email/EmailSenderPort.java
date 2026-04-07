@@ -10,4 +10,8 @@ public interface EmailSenderPort {
 
     void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert);
 
+    void sendAlertWithPdf(String toEmail, String toName,
+                          String subject, String bodyHtml,
+                          byte[] pdfBytes, String fileName);
+
 }

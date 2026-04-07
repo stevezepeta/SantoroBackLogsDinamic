@@ -705,11 +705,6 @@ public class SummaryInsightsService {
 
         if (!hasImportant) return;
 
-        // ── NUEVO: notificar ANTES del dedup para que siempre llegue el correo ──
-        // El throttle en AlertEmailNotifier evita spam (máx 1 correo cada 30 min)
-        alertEmailNotifier.notifyAlert(tenantId, out);
-        // ────────────────────────────────────────────────────────────────────────
-
         // bucketStart (último bucket activo)
         Instant bucketStart = null;
         try {
