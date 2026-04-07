@@ -9,7 +9,12 @@ import org.springframework.data.mongodb.repository.MongoRepository;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.mongodb.repository.Query;
+
 public interface ApiKeyRep extends MongoRepository<ApiKey, ObjectId> {
+
+  // Usa @Query explícita con el nombre real del campo en MongoDB
+  @Query("{ 'key_hash': ?0, 'status': ?1 }")
   Optional<ApiKey> findByKeyHashAndStatus(String keyHash, String status);
 
   default Optional<ApiKey> findActiveByHash(String keyHash) {

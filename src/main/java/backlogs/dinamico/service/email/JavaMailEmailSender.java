@@ -1,5 +1,6 @@
 package backlogs.dinamico.service.email;
 
+import backlogs.dinamico.service.ai.dto.AlertEmailDto;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.RequiredArgsConstructor;
@@ -62,6 +63,168 @@ public class JavaMailEmailSender implements EmailSenderPort {
                         "Has sido invitado a<br><strong class='org-name'>" + displayOrg + "</strong>",
                         "Alguien de <strong>" + displayOrg + "</strong> te ha invitado a acceder<br>al panel de gestión de logs <strong>DataLogs</strong>.",
                         ttlHours + " horas", otp, acceptLink, "Aceptar invitación"));
+    }
+
+    @Override
+    public void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert) {
+
+        String subject = buildAlertSubject(alert);
+        String html = buildAlertTemplate(toName, alert);
+        sendEmail(toEmail, subject, html);
+
+    }
+
+    private String buildAlertSubject(AlertEmailDto a) {
+        String icon = "CRIT".equalsIgnoreCase(a.status()) ? "🔴" : "🟡";
+        return icon + " [DataLogs] Alerta " + a.status() + " — "
+                + a.topSystem() + " · errorRate "
+                + String.format("%.1f%%", a.errorRate() * 100);
+    }
+
+    private String buildAlertTemplate(String toName, AlertEmailDto a) {
+        String statusColor  = "CRIT".equalsIgnoreCase(a.status()) ? "#dc2626" : "#d97706";
+        String statusBg     = "CRIT".equalsIgnoreCase(a.status())
+                ? "rgba(220,38,38,0.12)" : "rgba(217,119,6,0.12)";
+        String statusLabel  = "CRIT".equalsIgnoreCase(a.status()) ? "CRÍTICO" : "ADVERTENCIA";
+        String icon         = "CRIT".equalsIgnoreCase(a.status()) ? "🔴" : "🟡";
+
+        String warningsHtml = (a.warnings() == null || a.warnings().isEmpty()) ? "" :
+                a.warnings().stream()
+                        .map(w -> "<li style='margin:4px 0;color:#374151;font-size:13px'>" + w + "</li>")
+                        .collect(java.util.stream.Collectors.joining());
+
+        String name = (toName != null && !toName.isBlank()) ? toName : "Administrador";
+
+        return """
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+            <meta charset="UTF-8">
+            <style>
+              body { background:#f3f4f6; margin:0; padding:0; font-family:Arial,sans-serif; }
+              @media (prefers-color-scheme: dark) {
+                body          { background:#0f172a !important; }
+                .email-wrap   { background:#1e293b !important; border-color:#334155 !important; }
+                .body-td      { background:#1e293b !important; }
+                .title        { color:#f1f5f9 !important; }
+                .text-main    { color:#cbd5e1 !important; }
+                .metric-card  { background:#0f172a !important; border-color:#334155 !important; }
+                .metric-label { color:#64748b !important; }
+                .metric-value { color:#e2e8f0 !important; }
+                .warn-list    { background:#1e293b !important; border-color:#334155 !important; }
+                .warn-item    { color:#94a3b8 !important; }
+                .footer-td    { background:#0f172a !important; border-color:#1e293b !important; }
+                .footer-p     { color:#475569 !important; }
+              }
+            </style>
+            </head>
+            <body>
+            <table width="100%%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding:40px 16px">
+            <table width="560" cellpadding="0" cellspacing="0" class="email-wrap"
+                   style="background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;overflow:hidden">
+
+              <!-- HEADER -->
+              <tr>
+                <td style="background:#111827;padding:22px 32px">
+                  <div style="font-size:20px;font-weight:900;color:#fff;letter-spacing:2px">DataLogs</div>
+                  <div style="font-size:10px;color:#6b7280;letter-spacing:2px;margin-top:3px">SISTEMA DE GESTIÓN DE LOGS</div>
+                </td>
+              </tr>
+              <tr><td style="height:3px;background:linear-gradient(90deg,#334155,#64748b,#334155)"></td></tr>
+
+              <!-- STATUS BANNER -->
+              <tr>
+                <td style="background:%s;padding:16px 32px;text-align:center;border-bottom:2px solid %s">
+                  <span style="font-size:22px;font-weight:900;color:%s;letter-spacing:1px">
+                    %s ALERTA %s
+                  </span>
+                </td>
+              </tr>
+
+              <!-- BODY -->
+              <tr>
+                <td class="body-td" style="padding:28px 32px">
+                  <p class="title" style="font-size:16px;font-weight:700;color:#111827;margin:0 0 6px">
+                    Hola, %s
+                  </p>
+                  <p class="text-main" style="font-size:14px;color:#6b7280;margin:0 0 24px;line-height:1.6">
+                    Se detectó una alerta <strong>%s</strong> en tu entorno DataLogs
+                    correspondiente al periodo <strong>%s → %s</strong>.
+                  </p>
+
+                  <!-- MÉTRICAS -->
+                  <table width="100%%" cellpadding="0" cellspacing="0" style="margin-bottom:24px">
+                    <tr>
+                      <td width="50%%" style="padding-right:8px">
+                        <div class="metric-card" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;text-align:center">
+                          <div class="metric-label" style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:1px">Total eventos</div>
+                          <div class="metric-value" style="font-size:28px;font-weight:900;color:#111827;margin-top:6px">%s</div>
+                        </div>
+                      </td>
+                      <td width="50%%" style="padding-left:8px">
+                        <div class="metric-card" style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;text-align:center">
+                          <div class="metric-label" style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:1px">Error rate</div>
+                          <div class="metric-value" style="font-size:28px;font-weight:900;color:%s;margin-top:6px">%.1f%%</div>
+                        </div>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <!-- TOP SYSTEM -->
+                  <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:14px 16px;margin-bottom:16px">
+                    <div style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">Sistema más afectado</div>
+                    <div style="font-size:15px;font-weight:700;color:#111827">%s
+                      <span style="font-weight:400;color:#6b7280;font-size:13px">(%s eventos)</span>
+                    </div>
+                  </div>
+
+                  <!-- WARNINGS -->
+                  %s
+
+                  <!-- CTA -->
+                  <div style="text-align:center;margin-top:28px">
+                    <a href="%s" style="display:inline-block;background:#111827;color:#fff;
+                       text-decoration:none;font-size:14px;font-weight:700;
+                       padding:12px 36px;border-radius:6px">
+                      Ver dashboard →
+                    </a>
+                  </div>
+                </td>
+              </tr>
+
+              <!-- FOOTER -->
+              <tr>
+                <td class="footer-td" style="background:#f9fafb;padding:14px 32px;border-top:1px solid #e5e7eb">
+                  <p class="footer-p" style="margin:0;font-size:11px;color:#9ca3af">
+                    <strong>DataLogs</strong> · Grupo Santoro ·
+                    <a href="mailto:soporte.tecnico@grupo-santoro.com.mx"
+                       style="color:#9ca3af;text-decoration:none">soporte.tecnico@grupo-santoro.com.mx</a>
+                  </p>
+                </td>
+              </tr>
+
+            </table>
+            </td></tr>
+            </table>
+            </body></html>
+            """.formatted(
+                statusBg, statusColor,          // banner background + border
+                statusColor,                    // banner text color
+                icon, statusLabel,              // banner icon + label
+                name,                           // saludo
+                statusLabel,                    // "CRÍTICO" / "ADVERTENCIA"
+                a.fromLocal(), a.toLocal(),     // periodo
+                a.total(),                      // total eventos
+                statusColor, a.errorRate() * 100, // error rate color + valor
+                a.topSystem(),                  // top system nombre
+                a.topSystemCount(),             // top system count
+                warningsHtml.isBlank() ? "" :   // warnings list
+                        "<div class='warn-list' style='background:#fefce8;border:1px solid #fde68a;border-radius:6px;padding:14px 16px;margin-bottom:16px'>" +
+                                "<div style='font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px'>Detalles de la alerta</div>" +
+                                "<ul style='margin:0;padding-left:18px'>" + warningsHtml + "</ul></div>",
+                frontendBaseUrl                 // CTA link
+        );
     }
 
     private void sendEmail(String toEmail, String subject, String html) {

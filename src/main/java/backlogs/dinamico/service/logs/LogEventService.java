@@ -35,6 +35,7 @@ public class LogEventService {
     private final MongoTemplate mongoTemplate;
     private final ScopeGuard scopeGuard;
     private final DashboardNotifier dashboardNotifier;
+    private final EventTypeNormalizer eventTypeNormalizer;
 
     // ── ALL ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,7 @@ public class LogEventService {
             Authentication auth,
             String system,       // ← NUEVO
             String eventType,    // ← NUEVO
+            String eventCode,
             String status,       // ← NUEVO
             String outcome,      // ← NUEVO
             String severity,     // ← NUEVO
@@ -91,7 +93,7 @@ public class LogEventService {
         }
 
         // ── FILTROS ADICIONALES ───────────────────────────────────────────────
-        if (StringUtils.hasText(eventType)) cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
+        applyEventTypeFilter(cs, eventType, eventCode);
         if (StringUtils.hasText(status))    cs.add(Criteria.where("status").is(normalizeUpper(status)));
         if (StringUtils.hasText(outcome))   cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
         if (StringUtils.hasText(severity))  cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
@@ -131,6 +133,7 @@ public class LogEventService {
             Instant to,
             String caseId,
             String eventType,
+            String eventCode,
             String status,
             String outcome,
             String severity,
@@ -186,7 +189,7 @@ public class LogEventService {
 
         // FILTROS del request (los del usuario pueden quedar anulados por logFilters si se solapan)
         if (StringUtils.hasText(caseId))     cs.add(Criteria.where("caseId").is(normalize(caseId)));
-        if (StringUtils.hasText(eventType))  cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
+        applyEventTypeFilter(cs, eventType, eventCode);
         if (StringUtils.hasText(status))     cs.add(Criteria.where("status").is(normalizeUpper(status)));
         if (StringUtils.hasText(outcome))    cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
         if (StringUtils.hasText(severity))   cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
@@ -344,6 +347,9 @@ public class LogEventService {
         String caseId = normalize(req.caseId());
         Instant eventTime = (req.eventTime() != null) ? req.eventTime() : Instant.now();
 
+        EventTypeNormalizer.NormalizedEventType evType =
+                eventTypeNormalizer.normalize(req.eventType());
+
         String severityRaw  = normalizeUpper(req.severity());
         String severityNorm = LogNormalizationUtils.normalizeSeverity(severityRaw);
         String statusNorm   = normalizeUpper(req.status());
@@ -361,7 +367,11 @@ public class LogEventService {
                 .environment(env)
                 .caseId(caseId)
                 .eventTime(eventTime)
-                .eventType(normalizeUpper(req.eventType()))
+
+                .eventType(evType.category())     // "APP_EVENT"
+                .eventCode(evType.code())         // "1034"
+                .eventTypeRaw(evType.raw())       // "APP_EVENT_1034"
+
                 .status(statusNorm)
                 .outcome(outcomeNorm)
                 .severity(severityNorm)
@@ -421,6 +431,34 @@ public class LogEventService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void applyEventTypeFilter(List<Criteria> cs, String eventType, String eventCode) {
+
+        // Si viene un eventType crudo tipo "APP_EVENT_1034", lo normalizamos
+        if (StringUtils.hasText(eventType)) {
+            EventTypeNormalizer.NormalizedEventType normalized =
+                    eventTypeNormalizer.normalize(eventType);
+
+            // Siempre filtra por categoría
+            cs.add(Criteria.where("eventType").is(normalized.category()));
+
+            // Si el raw tenía código numérico ("APP_EVENT_1034"),
+            // lo agrega como filtro adicional de eventCode
+            if (StringUtils.hasText(normalized.code())) {
+                cs.add(Criteria.where("eventCode").is(normalized.code()));
+            }
+            // Si además viene eventCode explícito, tiene prioridad sobre el extraído del raw
+            else if (StringUtils.hasText(eventCode)) {
+                cs.add(Criteria.where("eventCode").is(eventCode.trim()));
+            }
+            return;
+        }
+
+        // Si no viene eventType pero sí eventCode solo (ej: buscar todos los "1034" sin importar categoría)
+        if (StringUtils.hasText(eventCode)) {
+            cs.add(Criteria.where("eventCode").is(eventCode.trim()));
+        }
+    }
 
     private static String normalize(String v) {
         if (v == null) return null;

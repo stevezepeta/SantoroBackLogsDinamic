@@ -78,14 +78,8 @@ public class SecurityConfig {
                             "/api/auth/refresh",
                             "/api/auth/accept-invite",
                             "/api/auth/forgot-password",
-                            "/api/auth/reset-password",
-                            "/api/auth/change-password"
+                            "/api/auth/reset-password"
                     ).permitAll();
-
-                    // Panel de Santoro
-                    auth.requestMatchers("/api/santoro/panel/**")
-                                    .hasAnyAuthority("ORG_ADMIN", "PERM_SETTINGS_MANAGE");
-
                     auth.requestMatchers(HttpMethod.GET, "/api/auth/qr-token").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/qr-login").authenticated();
 
@@ -96,7 +90,11 @@ public class SecurityConfig {
                     // Ingest (permitAll aquí; ApiKeyTenantFilter lo protege)
                     auth.requestMatchers(HttpMethod.POST, "/api/ingest/**").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/fingerprint/**").permitAll();
-                    auth.requestMatchers(HttpMethod.POST, "/api/logs", "/api/logs/events").permitAll();
+                    auth.requestMatchers(HttpMethod.POST,
+                            "/api/logs",
+                            "/api/logs/events",
+                            "/api/logs/events/batch"
+                    ).permitAll();
 
                     // Logs lectura siempre con JWT
                     auth.requestMatchers(HttpMethod.GET, "/api/logs/**")

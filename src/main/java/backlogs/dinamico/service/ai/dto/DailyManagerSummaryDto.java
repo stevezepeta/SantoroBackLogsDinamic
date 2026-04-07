@@ -1,5 +1,7 @@
 package backlogs.dinamico.service.ai.dto;
 
+import backlogs.dinamico.service.ai.EvaDeepAnalysisService;
+
 import java.util.List;
 import java.util.Map;
 
@@ -37,6 +39,8 @@ public class DailyManagerSummaryDto {
     public List<String> actions;
 
     public Map<String, Object> suggestedFilters;
+
+    public EvaDeepAnalysisService.DeepAnalysisResult aiDeepAnalysis;
 
 
 }

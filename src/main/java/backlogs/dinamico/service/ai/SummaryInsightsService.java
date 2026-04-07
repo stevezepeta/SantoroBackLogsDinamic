@@ -7,6 +7,7 @@ import backlogs.dinamico.repository.ai.AiMetricRepository;
 import backlogs.dinamico.service.ai.dto.DailySummaryDto;
 import backlogs.dinamico.service.ai.dto.HourlySummaryDto;
 import backlogs.dinamico.service.ai.dto.SummaryInsightsDto;
+import backlogs.dinamico.service.email.AlertEmailNotifier;
 import lombok.RequiredArgsConstructor;
 import org.bson.types.ObjectId;
 import org.springframework.stereotype.Service;
@@ -25,6 +26,7 @@ public class SummaryInsightsService {
     private final AiAlertRepository alertRepo;
     private final AiMetricRepository metricRepo;
     private final TrendAnomalyService trendAnomalyService;
+    private final AlertEmailNotifier alertEmailNotifier;
 
     // thresholds (puedes moverlos a application.yml después)
     private static final double ERR_WARN = 0.05; // 5%
@@ -703,6 +705,11 @@ public class SummaryInsightsService {
 
         if (!hasImportant) return;
 
+        // ── NUEVO: notificar ANTES del dedup para que siempre llegue el correo ──
+        // El throttle en AlertEmailNotifier evita spam (máx 1 correo cada 30 min)
+        alertEmailNotifier.notifyAlert(tenantId, out);
+        // ────────────────────────────────────────────────────────────────────────
+
         // bucketStart (último bucket activo)
         Instant bucketStart = null;
         try {
@@ -714,22 +721,21 @@ public class SummaryInsightsService {
                 if (last != null && last.dayStart != null) bucketStart = Instant.parse(last.dayStart);
             }
         } catch (Exception ignored) {
-            // si no se puede parsear, lo dejamos null (no rompe persistencia)
             bucketStart = null;
         }
 
         // Parse window instants de forma segura
         Instant windowFrom = null;
-        Instant windowTo = null;
+        Instant windowTo   = null;
         try { if (out.from != null) windowFrom = Instant.parse(out.from); } catch (Exception ignored) {}
-        try { if (out.to != null) windowTo = Instant.parse(out.to); } catch (Exception ignored) {}
-        
-        // incluye type|level|system(meta.system si existe) para dedupe correcto "por system"
+        try { if (out.to   != null) windowTo   = Instant.parse(out.to);   } catch (Exception ignored) {}
+
+        // incluye type|level|system para dedupe correcto "por system"
         String alertsSig = alerts.stream()
                 .filter(Objects::nonNull)
                 .map(a -> {
-                    String type = (a.type == null) ? "-" : a.type.trim();
-                    String level = (a.level == null) ? "-" : a.level.trim().toUpperCase(Locale.ROOT);
+                    String type   = (a.type  == null) ? "-" : a.type.trim();
+                    String level  = (a.level == null) ? "-" : a.level.trim().toUpperCase(Locale.ROOT);
                     String system = "-";
                     if (a.meta != null) {
                         Object s = a.meta.get("system");
@@ -741,43 +747,32 @@ public class SummaryInsightsService {
                 .sorted()
                 .collect(Collectors.joining(","));
 
-        // fingerprint para dedupe (más estable)
+        // fingerprint para dedupe
         String fp = sha1(
                 String.valueOf(out.granularity) + "|" +
-                        String.valueOf(out.from) + "|" +
-                        String.valueOf(out.to) + "|" +
-                        String.valueOf(out.status) + "|" +
+                        String.valueOf(out.from)        + "|" +
+                        String.valueOf(out.to)          + "|" +
+                        String.valueOf(out.status)      + "|" +
                         (bucketStart == null ? "-" : bucketStart.toString()) + "|" +
                         alertsSig
         );
 
+        // Si ya existe esta alerta exacta en BD, no la guardamos de nuevo
         if (alertRepo.findFirstByTenantIdAndFingerprint(tenantId, fp).isPresent()) return;
 
         AiAlertRecord rec = new AiAlertRecord();
         rec.setTenantId(tenantId);
         rec.setGranularity(out.granularity);
-
-        // ventana (si no parsea, queda null y no truena)
         rec.setWindowFrom(windowFrom);
         rec.setWindowTo(windowTo);
-
         rec.setBucketStart(bucketStart);
         rec.setCreatedAt(Instant.now());
-
         rec.setStatus(out.status);
         rec.setTotal(out.total);
         rec.setErrorRate(out.errorRate);
-
         rec.setSeverities(out.severities);
         rec.setAlerts(alerts);
-
         rec.setFingerprint(fp);
-
-        // Opcional (si ya tienes esos campos en AiAlertRecord):
-        // rec.setTz(out.tz);
-        // rec.setWindowFromLocal(out.fromLocal);
-        // rec.setWindowToLocal(out.toLocal);
-        // rec.setBucketStartLocal(null); // si lo quieres llenar, conviértelo aquí
 
         alertRepo.save(rec);
     }

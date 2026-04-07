@@ -3,6 +3,7 @@ package backlogs.dinamico.controller.ai;
 import backlogs.dinamico.api.dto.DailyManagerPrettyDto;
 import backlogs.dinamico.service.ai.AiDailyManagerService;
 import backlogs.dinamico.service.ai.AiLlmPrettyService;
+import backlogs.dinamico.service.ai.EvaDeepAnalysisService;
 import backlogs.dinamico.service.ai.dto.AiTicketDraftDto;
 import backlogs.dinamico.service.ai.dto.DailyManagerSummaryDto;
 import backlogs.dinamico.tenant.TenantContext;
@@ -21,6 +22,7 @@ public class AiDailyManagerLlmController {
 
     private final AiDailyManagerService dailyManagerService;
     private final AiLlmPrettyService llmPrettyService;
+    private final EvaDeepAnalysisService deepAnalysisService;
 
     @GetMapping("/pretty")
     public DailyManagerPrettyDto pretty(
@@ -32,15 +34,22 @@ public class AiDailyManagerLlmController {
             @RequestParam(required = false) String system
     ) {
         ObjectId tenantId = TenantContext.getTenantId();
-        if (tenantId == null) {
-            throw new IllegalStateException("tenant_not_resolved (JWT no seteo TenantContex)");
-        }
+        if (tenantId == null)
+            throw new IllegalStateException("tenant_not_resolved");
 
-        DailyManagerSummaryDto mgr = dailyManagerService.buildManagerSummary(tenantId, days, tz, from, to, system, null);
+        DailyManagerSummaryDto mgr = dailyManagerService.buildManagerSummary(
+                tenantId, days, tz, from, to, system, null);
+
+        // ── NUEVO: análisis profundo del evento dominante ─────────────────
+        Instant rangeFrom = (from != null) ? from
+                : Instant.now().minusSeconds((long) days * 24 * 60 * 60);
+        Instant rangeTo   = (to != null) ? to : Instant.now();
+
+        mgr.aiDeepAnalysis = deepAnalysisService.analyze(tenantId, system, rangeFrom, rangeTo, mgr);
+        // ─────────────────────────────────────────────────────────────────
 
         List<AiTicketDraftDto> drafts = dailyManagerService.buildTicketDraftsFromManagerSummary(
-                tenantId, days, tz, from, to, system, maxTickets
-        );
+                tenantId, days, tz, from, to, system, maxTickets);
 
         return llmPrettyService.prettyDailyManager(mgr, drafts);
     }

@@ -5,10 +5,12 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.scheduling.annotation.EnableAsync;
 
 @SpringBootApplication
 @ConfigurationPropertiesScan(basePackages = "backlogs.dinamico.config")
 @EnableConfigurationProperties(RateLimitProperties.class)
+@EnableAsync
 public class BacklogsApplication {
 
 	public static void main(String[] args) {

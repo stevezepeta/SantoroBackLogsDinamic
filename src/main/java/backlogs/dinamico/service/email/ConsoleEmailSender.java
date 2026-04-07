@@ -1,5 +1,6 @@
 package backlogs.dinamico.service.email;
 
+import backlogs.dinamico.service.ai.dto.AlertEmailDto;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
@@ -41,5 +42,10 @@ public class ConsoleEmailSender implements EmailSenderPort {
                 ║  Expires : {} horas
                 ╚══════════════════════════════════════════╝
                 """, toEmail, orgName, otp, ttlHours);
+    }
+
+    @Override
+    public void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert) {
+
     }
 }
