@@ -146,19 +146,22 @@ public class AuthorizationContextService {
         // tiene sistemas específicos asignados (caso: VIEWER con systems restringidos)
         boolean hasSpecificSystems = !allowedSystems.isEmpty();
 
-        if (orgWide && !hasSpecificSystems) {
-            // orgWide sin restricción → cargar todos los sistemas del tenant
+        boolean isAdminOrOwner = roleCodes.contains(RoleCode.ORG_OWNER.name())
+                || roleCodes.contains(RoleCode.ORG_ADMIN.name());
+
+        if (orgWide && !hasSpecificSystems || isAdminOrOwner) {
             Query q = new Query();
             q.addCriteria(Criteria.where("tenant_id").is(tenantId));
-            List<String> systems = mongoTemplate.findDistinct(q, "system", "log_events", String.class);
+            List<String> systems = mongoTemplate.findDistinct(
+                    q, "system", "log_events", String.class);
             systems.stream()
                     .filter(StringUtils::hasText)
                     .map(String::trim)
                     .map(String::toUpperCase)
                     .forEach(allowedSystems::add);
         }
-        // Si orgWide=true pero hasSpecificSystems=true → respetar los systems del invite
 
+        // Si orgWide=true pero hasSpecificSystems=true → respetar los systems del invite
         return AuthorizationContext.builder()
                 .roles(roleCodes)
                 .permissions(permissions)

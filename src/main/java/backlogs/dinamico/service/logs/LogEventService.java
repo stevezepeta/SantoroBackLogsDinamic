@@ -72,8 +72,13 @@ public class LogEventService {
             scopeGuard.requireSystemAccess(user, systemNorm);
             cs.add(Criteria.where("system").is(systemNorm));
         } else {
+
+            boolean isAdminOrOwner = user.getRoles() != null &&
+                    (user.getRoles().contains("ORG_ADMIN") ||
+                        user.getRoles().contains("ORG_OWNER"));
+
             // Sin system explícito → scope normal del usuario
-            if (!user.isOrgWide()) {
+            if (!user.isOrgWide() && !isAdminOrOwner) {
                 var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
                         : user.getAllowedSystems().stream()
                         .filter(StringUtils::hasText)
@@ -159,13 +164,19 @@ public class LogEventService {
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
 
+        boolean isAdminOrOwner = user.getRoles() != null &&
+                (user.getRoles().contains("ORG_ADMIN") ||
+                        user.getRoles().contains("ORG_OWNER"));
+
         // SCOPE / SYSTEM FILTER
         if (StringUtils.hasText(system)) {
-            scopeGuard.requireSystemAccess(user, system);
+            if(!isAdminOrOwner) {
+                scopeGuard.requireSystemAccess(user, system);
+            }
             cs.add(Criteria.where("system").is(system));
         } else {
-            if (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty())) {
-                // orgWide sin restricción → ve todos
+            if (isAdminOrOwner || (user.isOrgWide() &&
+                    (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()))) {
             } else {
                 var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
                         : user.getAllowedSystems().stream()

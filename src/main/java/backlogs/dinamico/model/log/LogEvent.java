@@ -24,7 +24,6 @@ import java.util.Map;
 @AllArgsConstructor
 @NoArgsConstructor
 @CompoundIndexes({
-        // Renombrados a v2 para evitar colisiones con índices viejos tenant_id vs tenantId
         @CompoundIndex(name = "idx_tenant_system_time_v2",
                 def = "{'tenant_id':1,'system':1,'eventTime':-1}"),
 

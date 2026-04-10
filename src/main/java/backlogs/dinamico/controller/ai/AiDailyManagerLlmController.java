@@ -40,7 +40,7 @@ public class AiDailyManagerLlmController {
         DailyManagerSummaryDto mgr = dailyManagerService.buildManagerSummary(
                 tenantId, days, tz, from, to, system, null);
 
-        // ── NUEVO: análisis profundo del evento dominante ─────────────────
+        // ── análisis profundo del evento dominante ─────────────────
         Instant rangeFrom = (from != null) ? from
                 : Instant.now().minusSeconds((long) days * 24 * 60 * 60);
         Instant rangeTo   = (to != null) ? to : Instant.now();

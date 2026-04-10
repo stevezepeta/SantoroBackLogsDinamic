@@ -15,6 +15,7 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +24,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -37,12 +39,14 @@ public class AlertSchedulerService {
     private final EvaDeepAnalysisService deepAnalysisService;
     private final AlertSentRepository   alertSentRepo;
 
+    private final SimpMessagingTemplate wsTemplate;
+
     private static final DateTimeFormatter DAY_KEY_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd")
                     .withZone(ZoneId.of("America/Mexico_City"));
 
     // ── Corre cada hora ───────────────────────────────────────────────────────
-    @Scheduled(fixedDelay = 60 * 1000) // cada 60 minutos
+    @Scheduled(fixedDelay = 60 * 60 * 1000) // cada 60 minutos
     public void runHourlyAlertCheck() {
         log.info("[AlertScheduler] Iniciando ciclo...");
 
@@ -51,12 +55,12 @@ public class AlertSchedulerService {
                 Organization.class, "organizations"
         );
 
-        log.info("[AlertScheduler] Organizaciones encontradas: {}", orgs.size()); // ← NUEVO
+        log.info("[AlertScheduler] Organizaciones encontradas: {}", orgs.size());
 
         for (Organization org : orgs) {
             ObjectId tenantId = org.getId();
             if (tenantId == null) continue;
-            log.info("[AlertScheduler] Procesando org: {} ({})", org.getName(), tenantId); // ← NUEVO
+            log.info("[AlertScheduler] Procesando org: {} ({})", org.getName(), tenantId);
             try {
                 processOrganization(tenantId, org);
             } catch (Exception e) {
@@ -105,16 +109,16 @@ public class AlertSchedulerService {
 
     private void processSystem(ObjectId tenantId, String system,
                                String tz, String dayKey) {
-        // 3. Calcular resumen de las últimas 24 horas para este sistema
+        // Calcular resumen de las últimas 24 horas para este sistema
         var hourly = hourlySummaryService.buildHourlySummary(
                 tenantId, 24, tz, null, null, system);
         SummaryInsightsDto insights = summaryInsightsService.fromHourly(tenantId, hourly);
 
-        // 4. Solo continuar si hay WARN o CRIT
+        // Solo continuar si hay WARN o CRIT
         if (!"CRIT".equalsIgnoreCase(insights.status)
                 && !"WARN".equalsIgnoreCase(insights.status)) return;
 
-        // 5. Verificar si ya se envió reporte hoy para este sistema
+        // Verificar si ya se envió reporte hoy para este sistema
         var existing = alertSentRepo.findByTenantIdAndSystemAndDayKey(
                 tenantId, system, dayKey);
 
@@ -144,7 +148,7 @@ public class AlertSchedulerService {
             return;
         }
 
-        // 6. Generar análisis IA
+        // Generar análisis IA
         Instant from = Instant.now().minus(24, ChronoUnit.HOURS);
         Instant to   = Instant.now();
 
@@ -163,27 +167,27 @@ public class AlertSchedulerService {
         EvaDeepAnalysisService.DeepAnalysisResult aiAnalysis =
                 deepAnalysisService.analyzeFromInsights(tenantId, system, from, to, insights);
 
-        // 7. Generar PDF
+        // Generar PDF
         byte[] pdf = pdfService.generateReport(tenantId, system, insights, aiAnalysis);
         if (pdf == null) {
             log.error("[AlertScheduler] PDF nulo para {} — omitiendo envío y registro", system);
             return;
         }
 
-        // 8. Enviar correo con PDF
+        // Enviar correo con PDF
         alertEmailNotifier.sendReportEmail(tenantId, system, insights, pdf, reportType);
 
         final String finalReportType = reportType;
         final double finalErrorRate = insights.errorRate;
         final long finalTotal = insights.total;
 
-        // 9. Guardar registro de envío
+        // Guardar registro de envío
         AlertSentRecord sentRecord = alertSentRepo
                 .findByTenantIdAndSystemAndDayKey(tenantId, system, dayKey)
                 .map(rec -> {
                     rec.setSentAt(Instant.now());
-                    rec.setErrorRate(finalErrorRate);   // ← usa final
-                    rec.setType(finalReportType);        // ← usa final
+                    rec.setErrorRate(finalErrorRate);
+                    rec.setType(finalReportType);
                     return rec;
                 })
                 .orElseGet(() -> AlertSentRecord.builder()
@@ -191,13 +195,33 @@ public class AlertSchedulerService {
                         .system(system)
                         .dayKey(dayKey)
                         .sentAt(Instant.now())
-                        .errorRate(finalErrorRate)       // ← usa final
-                        .total(finalTotal)               // ← usa final
-                        .type(finalReportType)           // ← usa final
+                        .errorRate(finalErrorRate)
+                        .total(finalTotal)
+                        .type(finalReportType)
                         .build()
                 );
 
         alertSentRepo.save(sentRecord);
+
+        // Notificación WebSocket si es CRIT
+        if ("CRIT".equalsIgnoreCase(insights.status)) {
+            String topic = "/topic/alerts/" + tenantId.toHexString();
+            Map<String, Object> alertMsg = new java.util.HashMap<>();
+            alertMsg.put("type",      "ALERT_CRIT");
+            alertMsg.put("system",    system);
+            alertMsg.put("status",    insights.status);
+            alertMsg.put("errorRate", insights.errorRate);
+            alertMsg.put("total",     insights.total);
+            alertMsg.put("message",   "Sistema " + system + " en estado CRÍTICO — Error rate: "
+                    + String.format(java.util.Locale.ROOT, "%.1f%%", insights.errorRate * 100));
+            alertMsg.put("timestamp", java.time.Instant.now().toString());
+            try {
+                wsTemplate.convertAndSend(topic, alertMsg);
+                log.info("[AlertScheduler] WS CRIT enviado a {}", topic);
+            } catch (Exception e) {
+                log.warn("[AlertScheduler] Error enviando WS alert: {}", e.getMessage());
+            }
+        }
 
         log.info("[AlertScheduler] Reporte {} enviado para sistema {} (tenant {})",
                 reportType, system, tenantId);

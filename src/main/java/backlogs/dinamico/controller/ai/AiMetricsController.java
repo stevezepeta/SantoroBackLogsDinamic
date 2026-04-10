@@ -59,7 +59,6 @@ public class AiMetricsController {
         String g = normGranularity(granularity);
         String sys = normSystem(system);
 
-        // Ventana: daily usa days; hourly usa hours
         Instant to = floorNowToBucket(zone, g);
         Instant from = "hourly".equals(g)
                 ? to.minusSeconds(hours * 3600L)
