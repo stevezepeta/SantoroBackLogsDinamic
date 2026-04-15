@@ -7,6 +7,8 @@ import backlogs.dinamico.service.ai.dto.SummaryInsightsDto;
 import backlogs.dinamico.service.email.AlertEmailNotifier;
 import backlogs.dinamico.service.email.AlertReportPdfService;
 import backlogs.dinamico.service.ai.EvaDeepAnalysisService;
+import backlogs.dinamico.service.notifications.FcmService;
+import backlogs.dinamico.service.notifications.FcmTokenService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
@@ -40,6 +42,9 @@ public class AlertSchedulerService {
     private final AlertSentRepository   alertSentRepo;
 
     private final SimpMessagingTemplate wsTemplate;
+
+    private final FcmService fcmService;
+    private final FcmTokenService fcmTokenService;
 
     private static final DateTimeFormatter DAY_KEY_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd")
@@ -109,16 +114,13 @@ public class AlertSchedulerService {
 
     private void processSystem(ObjectId tenantId, String system,
                                String tz, String dayKey) {
-        // Calcular resumen de las últimas 24 horas para este sistema
         var hourly = hourlySummaryService.buildHourlySummary(
                 tenantId, 24, tz, null, null, system);
         SummaryInsightsDto insights = summaryInsightsService.fromHourly(tenantId, hourly);
 
-        // Solo continuar si hay WARN o CRIT
         if (!"CRIT".equalsIgnoreCase(insights.status)
                 && !"WARN".equalsIgnoreCase(insights.status)) return;
 
-        // Verificar si ya se envió reporte hoy para este sistema
         var existing = alertSentRepo.findByTenantIdAndSystemAndDayKey(
                 tenantId, system, dayKey);
 
@@ -126,11 +128,8 @@ public class AlertSchedulerService {
         String  reportType = "DAILY";
 
         if (existing.isEmpty()) {
-            // Primera alerta del día → enviar siempre
             shouldSend = true;
         } else {
-            // Ya se envió hoy → verificar escalada
-            // Solo escalar si el errorRate subió más de 15 puntos porcentuales
             double prevRate = existing.get().getErrorRate();
             double currRate = insights.errorRate;
             double delta    = currRate - prevRate;
@@ -148,22 +147,12 @@ public class AlertSchedulerService {
             return;
         }
 
-        // Generar análisis IA
+        // ── A partir de aquí solo se ejecuta cuando shouldSend = true ────────────
+
         Instant from = Instant.now().minus(24, ChronoUnit.HOURS);
         Instant to   = Instant.now();
 
-        backlogs.dinamico.service.ai.dto.DailyManagerSummaryDto miniSummary =
-                new backlogs.dinamico.service.ai.dto.DailyManagerSummaryDto();
-        miniSummary.total     = insights.total;
-        miniSummary.errorRate = insights.errorRate;
-        miniSummary.status    = insights.status;
-        miniSummary.topOutcomeRange    = insights.topOutcomeRange != null
-                ? insights.topOutcomeRange.stream()
-                .map(i -> { var t = new backlogs.dinamico.service.ai.dto.SummaryInsightsDto.TopItem(i.name, i.count);
-                    return new backlogs.dinamico.service.ai.dto.SummaryInsightsDto.TopItem(i.name, i.count); })
-                .collect(java.util.stream.Collectors.toList())
-                : null;
-
+        // Análisis IA — usando insights directamente (miniSummary era innecesario)
         EvaDeepAnalysisService.DeepAnalysisResult aiAnalysis =
                 deepAnalysisService.analyzeFromInsights(tenantId, system, from, to, insights);
 
@@ -178,8 +167,8 @@ public class AlertSchedulerService {
         alertEmailNotifier.sendReportEmail(tenantId, system, insights, pdf, reportType);
 
         final String finalReportType = reportType;
-        final double finalErrorRate = insights.errorRate;
-        final long finalTotal = insights.total;
+        final double finalErrorRate  = insights.errorRate;
+        final long   finalTotal      = insights.total;
 
         // Guardar registro de envío
         AlertSentRecord sentRecord = alertSentRepo
@@ -203,7 +192,9 @@ public class AlertSchedulerService {
 
         alertSentRepo.save(sentRecord);
 
-        // Notificación WebSocket si es CRIT
+        // ── Notificaciones solo cuando se envía el reporte ────────────────────────
+
+        // WebSocket (solo CRIT)
         if ("CRIT".equalsIgnoreCase(insights.status)) {
             String topic = "/topic/alerts/" + tenantId.toHexString();
             Map<String, Object> alertMsg = new java.util.HashMap<>();
@@ -214,13 +205,25 @@ public class AlertSchedulerService {
             alertMsg.put("total",     insights.total);
             alertMsg.put("message",   "Sistema " + system + " en estado CRÍTICO — Error rate: "
                     + String.format(java.util.Locale.ROOT, "%.1f%%", insights.errorRate * 100));
-            alertMsg.put("timestamp", java.time.Instant.now().toString());
+            alertMsg.put("timestamp", Instant.now().toString());
             try {
                 wsTemplate.convertAndSend(topic, alertMsg);
                 log.info("[AlertScheduler] WS CRIT enviado a {}", topic);
             } catch (Exception e) {
                 log.warn("[AlertScheduler] Error enviando WS alert: {}", e.getMessage());
             }
+        }
+
+        // FCM Push — CRIT y WARN (el usuario quiere saber de ambos en el teléfono)
+        List<String> tokens = fcmTokenService.getTokensByTenant(tenantId);
+        if (!tokens.isEmpty()) {
+            String emoji  = "CRIT".equalsIgnoreCase(insights.status) ? "🚨" : "⚠️";
+            String level  = "CRIT".equalsIgnoreCase(insights.status) ? "CRÍTICA" : "ADVERTENCIA";
+            String title  = emoji + " Alerta " + level + " — " + system;
+            String body   = String.format("Error rate: %.1f%% · %d eventos · Reporte enviado por correo",
+                    insights.errorRate * 100, insights.total);
+            fcmService.sendToMultiple(tokens, title, body);
+            log.info("[AlertScheduler] FCM enviado a {} dispositivos para {}", tokens.size(), system);
         }
 
         log.info("[AlertScheduler] Reporte {} enviado para sistema {} (tenant {})",
