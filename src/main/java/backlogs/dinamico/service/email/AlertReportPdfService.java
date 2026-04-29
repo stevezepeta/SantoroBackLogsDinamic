@@ -197,7 +197,7 @@ public class AlertReportPdfService {
 
                 // ANÁLISIS IA
                 + "  <div class=\"section\">\n"
-                + "    <div class=\"section-title\">Analisis generado por IA</div>\n"
+                + "    <div class=\"section-title\">Analisis generado por sistema</div>\n"
                 + "    <div class=\"ai-box\">\n"
                 + "      <div class=\"ai-label\">Evento dominante</div>\n"
                 + "      <div class=\"ai-event\">" + strAiEvent + "</div>\n"

@@ -10,6 +10,7 @@ import backlogs.dinamico.repository.log.LogEventRepository;
 import backlogs.dinamico.security.auth.ScopeGuard;
 import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.data.domain.*;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -25,6 +26,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class LogEventService {
@@ -36,6 +38,8 @@ public class LogEventService {
     private final ScopeGuard scopeGuard;
     private final DashboardNotifier dashboardNotifier;
     private final EventTypeNormalizer eventTypeNormalizer;
+
+    private final DeviceRegistryService deviceRegistryService;
 
     // ── ALL ───────────────────────────────────────────────────────────────────
 
@@ -431,9 +435,74 @@ public class LogEventService {
                 )
                 .payload(req.payload())
                 .meta(req.meta())
+                .remoteConnection(req.remoteConnection() == null ? null : new LogEvent.RemoteConnection(
+                        req.remoteConnection().sourceIp(),
+                        req.remoteConnection().sourcePort(),
+                        req.remoteConnection().destinationIp(),
+                        req.remoteConnection().destinationPort(),
+                        req.remoteConnection().protocol(),
+                        req.remoteConnection().authMethod(),
+                        req.remoteConnection().authResult(),
+                        req.remoteConnection().user(),
+                        req.remoteConnection().sessionId(),
+                        req.remoteConnection().sessionDuration(),
+                        req.remoteConnection().clientType(),
+                        req.remoteConnection().sourceCountry(),
+                        req.remoteConnection().sourceCity(),
+                        req.remoteConnection().isLocalNetwork(),
+                        req.remoteConnection().riskScore(),
+                        req.remoteConnection().metadata()
+                ))
                 .build();
 
         LogEvent saved = repo.save(event);
+
+        // ── Auto-registro de dispositivo ──────────────────────────────────────────
+        try {
+            String devId     = saved.getCaseId();
+            String devSystem = saved.getSystem();
+            String devType   = null;
+            String devIp     = null;
+            String devHost   = null;
+            String devEvent  = saved.getEventType();
+
+            if (saved.getActor() != null) {
+                devType = saved.getActor().getType();
+                devHost = saved.getActor().getFullName();
+            }
+
+            if (saved.getMeta() != null) {
+                Object ipObj = saved.getMeta().get("ip");
+                devIp = ipObj != null ? ipObj.toString() : null;
+            }
+
+            Double lat = null, lng = null;
+            String locName = null;
+
+            if (saved.getGeo() != null
+                    && saved.getGeo().getCoordinates() != null
+                    && saved.getGeo().getCoordinates().size() >= 2) {
+                lng = saved.getGeo().getCoordinates().get(0);
+                lat = saved.getGeo().getCoordinates().get(1);
+            }
+
+            if (saved.getLocation() != null) {
+                locName = saved.getLocation().getName();
+            }
+
+            log.info("[LogEvent] Registrando dispositivo: devId={}, system={}, type={}, ip={}, lat={}, lng={}, loc={}",
+                    devId, devSystem, devType, devIp, lat, lng, locName);
+
+            deviceRegistryService.upsertFromLog(
+                    saved.getTenantId(), devId, devSystem, devType, devIp, devHost,
+                    lat, lng, locName, devEvent
+            );
+
+            log.info("[LogEvent] Dispositivo registrado OK: {}", devId);
+
+        } catch (Exception e) {
+            log.error("[LogEvent] Error registrando dispositivo: {}", e.getMessage(), e);
+        }
 
         // ── Notificar dashboard en tiempo real ───────────────────────────────
         dashboardNotifier.notifyNewLog(tenantId, saved.getSystem());
@@ -442,7 +511,6 @@ public class LogEventService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
     private void applyEventTypeFilter(List<Criteria> cs, String eventType, String eventCode) {
 
         // Si viene un eventType crudo tipo "APP_EVENT_1034", lo normalizamos

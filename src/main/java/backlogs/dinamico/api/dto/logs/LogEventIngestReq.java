@@ -42,7 +42,9 @@ public record LogEventIngestReq(
         List<String> tags,
 
         Map<String, Object> payload,
-        Map<String, Object> meta
+        Map<String, Object> meta,
+
+        RemoteConnection remoteConnection
 
 ) {
 
@@ -83,6 +85,25 @@ public record LogEventIngestReq(
     public record ReasonInfo(
             String code,
             String description
+    ) {}
+
+    public record RemoteConnection(
+            String sourceIp,
+            Integer sourcePort,
+            String destinationIp,
+            Integer destinationPort,
+            String protocol,
+            String authMethod,
+            String authResult,
+            String user,
+            String sessionId,
+            Long sessionDuration,
+            String clientType,
+            String sourceCountry,
+            String sourceCity,
+            Boolean isLocalNetwork,
+            Double riskScore,
+            Map<String, Object> metadata
     ) {}
 
 }

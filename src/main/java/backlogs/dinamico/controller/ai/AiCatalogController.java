@@ -1,6 +1,7 @@
 package backlogs.dinamico.controller.ai;
 
 import backlogs.dinamico.api.ApiResponse;
+import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.service.ai.AiCatalogService;
 import backlogs.dinamico.service.ai.HourlySummaryService;
 import backlogs.dinamico.service.ai.dto.SystemCatalogItemDto;
@@ -17,6 +18,7 @@ import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Locale;
 
 @Validated
 @SecurityRequirement(name = "bearerAuth")
@@ -38,7 +40,37 @@ public class AiCatalogController {
             @RequestParam(defaultValue = "100") @Min(1) @Max(200) int limit
     ) {
         ObjectId tenantId = hourlySummaryService.resolveTenantId(auth, req);
-        List<SystemCatalogItemDto> data = aiCatalogService.listSystems(tenantId, q, limit);
+
+        // Calcular sistemas permitidos según RBAC
+        List<String> allowedSystems = resolveAllowedSystems(auth);
+
+        List<SystemCatalogItemDto> data = aiCatalogService.listSystems(tenantId, q, limit, allowedSystems);
         return ApiResponse.ok("Systems IA", "ai_catalog_systems", data);
+    }
+
+    // ── Helper ────────────────────────────────────────────────────────────────
+
+    /**
+     * Devuelve null si el usuario no tiene restricciones (ve todos),
+     * o la lista de sistemas permitidos si está acotado.
+     */
+    private List<String> resolveAllowedSystems(Authentication auth) {
+        if (auth == null || !(auth.getPrincipal() instanceof AuthUser user)) return null;
+
+        boolean isAdminOrOwner = user.getRoles() != null &&
+                (user.getRoles().contains("ORG_ADMIN") || user.getRoles().contains("ORG_OWNER"));
+
+        boolean isUnrestricted = isAdminOrOwner ||
+                (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()));
+
+        if (isUnrestricted) return null; // sin restricción
+
+        List<String> allowed = user.getAllowedSystems();
+        if (allowed == null || allowed.isEmpty()) return List.of(); // sin acceso
+        return allowed.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                .distinct()
+                .toList();
     }
 }

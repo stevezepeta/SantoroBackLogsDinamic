@@ -148,10 +148,15 @@ public class AiSummariesController {
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
             @Schema(description = "Fin (UTC ISO-8601).", example = "2026-02-11T00:00:00Z")
-            Instant to
+            Instant to,
+
+            @io.swagger.v3.oas.annotations.Parameter(
+                    description = "Filtrar por sistema específico (ej: TRUSTVALUE). Sin este param incluye todos los sistemas.")
+            @RequestParam(required = false)
+            String system
     ) {
         ObjectId tenantId = resolveTenantId(auth, req);
-        DailySummaryDto dto = dailySummaryService.buildDailySummary(tenantId, days, tz, from, to);
+        DailySummaryDto dto = dailySummaryService.buildDailySummary(tenantId, days, tz, from, to, system);
 
         ZoneId zone = safeZone(tz);
         applyLocalWindow(dto, zone);
@@ -231,12 +236,22 @@ public class AiSummariesController {
 
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
-            Instant to
+            Instant to,
+
+            @io.swagger.v3.oas.annotations.Parameter(
+                    description = "Filtrar por sistema (ej: TRUSTVALUE). Sin este param mezcla todos los sistemas.")
+            @RequestParam(required = false)
+            String system
     ) {
         ObjectId tenantId = resolveTenantId(auth, req);
 
-        DailySummaryDto summary = dailySummaryService.buildDailySummary(tenantId, days, tz, from, to);
+        // ── CORRECCIÓN: pasar system para que el DailySummary no mezcle contextos ──
+        DailySummaryDto summary = dailySummaryService.buildDailySummary(tenantId, days, tz, from, to, system);
         SummaryInsightsDto insights = summaryInsightsService.fromDaily(tenantId, summary);
+
+        if (StringUtils.hasText(system)) {
+            insights.system = system;
+        }
 
         ZoneId zone = safeZone(tz);
         applyLocalWindow(insights, zone);
@@ -259,10 +274,15 @@ public class AiSummariesController {
             HttpServletRequest req,
             @RequestParam(defaultValue = DEFAULT_TZ) String tz,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @io.swagger.v3.oas.annotations.Parameter(
+                    description = "Filtrar por sistema específico (ej: TRUSTVALUE). " +
+                                  "Sin este parámetro se mezclan todos los sistemas del tenant.")
+            @RequestParam(required = false) String system
     ) {
         ObjectId tenantId = resolveTenantId(auth, req);
-        DailyManagerBriefDto dto = dailyManagerBriefService.build(tenantId, tz, from, to);
+        // ── CORRECCIÓN: pasar system para evitar fuga de contexto entre sistemas ──
+        DailyManagerBriefDto dto = dailyManagerBriefService.build(tenantId, tz, from, to, system);
         return ApiResponse.ok("Resumen diario (gerencia)", "ai_daily_manager_brief", dto);
     }
 

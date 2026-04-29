@@ -191,7 +191,10 @@ public class LogDashboardService {
             boolean isAdminOrOwner = user.getRoles() != null &&
                     (user.getRoles().contains("ORG_ADMIN") ||
                             user.getRoles().contains("ORG_OWNER"));
-            if (!isAdminOrOwner && !user.isOrgWide()) {
+            boolean isUnrestricted = isAdminOrOwner ||
+                    (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()));
+
+            if (!isUnrestricted) {
                 List<String> allowed = user.getAllowedSystems() != null
                         ? user.getAllowedSystems() : List.of();
                 if (!allowed.contains(system)) continue;

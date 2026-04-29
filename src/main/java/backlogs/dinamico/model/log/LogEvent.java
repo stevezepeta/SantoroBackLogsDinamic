@@ -115,23 +115,26 @@ public class LogEvent {
   private HttpInfo http;
   @Field("sla")
   private SlaInfo sla;
-  @Field("reason")
-  private ReasonInfo reason;
+   @Field("reason")
+   private ReasonInfo reason;
 
-  @Builder.Default
-  @Field("tags")
-  private List<String> tags = new ArrayList<>();
+   @Field("remoteConnection")
+   private RemoteConnection remoteConnection;
 
-  @Field("payload")
-  private Map<String, Object> payload;
-  @Field("meta")
-  private Map<String, Object> meta;
+   @Builder.Default
+   @Field("tags")
+   private List<String> tags = new ArrayList<>();
+
+   @Field("payload")
+   private Map<String, Object> payload;
+   @Field("meta")
+   private Map<String, Object> meta;
 
 
-  @Field("messageKey")
-  private String messageKey;
-  @Field("isError")
-  private Boolean isError;
+   @Field("messageKey")
+   private String messageKey;
+   @Field("isError")
+   private Boolean isError;
 
   @Data
   @AllArgsConstructor
@@ -231,15 +234,69 @@ public class LogEvent {
     private Long elapsedSeconds;
   }
 
-  @Data
-  @AllArgsConstructor
-  @NoArgsConstructor
-  public static class ReasonInfo {
+   @Data
+   @AllArgsConstructor
+   @NoArgsConstructor
+   public static class ReasonInfo {
 
-    @Field("code")
-    private String code;
+     @Field("code")
+     private String code;
 
-    @Field("description")
-    private String description;
-  }
+     @Field("description")
+     private String description;
+   }
+
+   @Data
+   @AllArgsConstructor
+   @NoArgsConstructor
+   public static class RemoteConnection {
+
+     @Field("sourceIp")
+     private String sourceIp;
+
+     @Field("sourcePort")
+     private Integer sourcePort;
+
+     @Field("destinationIp")
+     private String destinationIp;
+
+     @Field("destinationPort")
+     private Integer destinationPort;
+
+     @Field("protocol")
+     private String protocol;
+
+     @Field("authMethod")
+     private String authMethod;
+
+     @Field("authResult")
+     private String authResult;
+
+     @Field("user")
+     private String user;
+
+     @Field("sessionId")
+     private String sessionId;
+
+     @Field("sessionDuration")
+     private Long sessionDuration;
+
+     @Field("clientType")
+     private String clientType;
+
+     @Field("sourceCountry")
+     private String sourceCountry;
+
+     @Field("sourceCity")
+     private String sourceCity;
+
+     @Field("isLocalNetwork")
+     private Boolean isLocalNetwork;
+
+     @Field("riskScore")
+     private Double riskScore;
+
+     @Field("metadata")
+     private Map<String, Object> metadata;
+   }
 }

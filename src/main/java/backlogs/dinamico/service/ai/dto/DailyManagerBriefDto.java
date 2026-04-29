@@ -10,6 +10,10 @@ public class DailyManagerBriefDto {
     @Schema(example = "America/Mexico_City")
     public String tz;
 
+    /** Sistema filtrado en esta consulta. null = todos los sistemas del tenant. */
+    @Schema(example = "TRUSTVALUE", nullable = true)
+    public String system;
+
     // Día objetivo (bucket)
     public String dayStart;        // UTC ISO
     public String dayStartLocal;   // ISO con offset

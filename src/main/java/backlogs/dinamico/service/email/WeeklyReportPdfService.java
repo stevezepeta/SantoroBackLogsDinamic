@@ -171,7 +171,7 @@ public class WeeklyReportPdfService {
 
                 // ANÁLISIS IA
                 + "  <div class=\"section\">\n"
-                + "    <div class=\"section-title\">Analisis ejecutivo generado por IA</div>\n"
+                + "    <div class=\"section-title\">Analisis ejecutivo</div>\n"
                 + "    <div class=\"ai-box\">\n"
                 + "      <div class=\"ai-label\">Que paso esta semana</div>\n"
                 + "      <div class=\"ai-text\">" + strAiSummary + "</div>\n"
