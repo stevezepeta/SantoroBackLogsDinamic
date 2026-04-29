@@ -3,19 +3,18 @@ echo ============================================
 echo Configurando variables de entorno para PRODUCCION
 echo ============================================
 
-REM MongoDB Atlas
-set MONGODB_URI=mongodb+srv://alandev:q6iLhYog5mtiKTY3@cluster0.wl0b8lf.mongodb.net/backlogs?retryWrites=true&w=majority&appName=Cluster0
-set MONGODB_DATABASE=backlogs
+REM Cargar variables desde archivo .env local (debe existir)
+if not exist ".env" (
+    echo [ERROR] No se encontro el archivo .env
+    echo Por favor, copia .env.example a .env y configura tus credenciales
+    pause
+    exit /b 1
+)
 
-REM OpenAI API
-set OPENAI_API_KEY=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
-
-REM Email Configuration
-set MAIL_PASSWORD=wnnkjroexgypcpss
-set MAIL_FROM=soporte.tecnico@grupo-santoro.com.mx
-
-REM Server Port
-set SERVER_PORT=8005
+REM Leer variables del archivo .env
+for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
+    set "%%a=%%b"
+)
 
 echo.
 echo Variables de entorno configuradas correctamente:

@@ -37,3 +37,9 @@ build/
 .env.local
 .env.production
 *.env
+
+### Scripts con credenciales locales ###
+run-produccion-local.bat
+run-produccion-local.sh
+*-local.bat
+*-local.sh

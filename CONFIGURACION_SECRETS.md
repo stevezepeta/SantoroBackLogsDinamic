@@ -6,13 +6,13 @@ Para ejecutar la aplicación en **producción**, necesitas configurar las siguie
 
 ### 1. OpenAI API
 ```bash
-OPENAI_API_KEY=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
+OPENAI_API_KEY=sk-proj-TU-API-KEY-AQUI
 ```
 
 ### 2. Email (SMTP Gmail)
 ```bash
-MAIL_PASSWORD=wnnkjroexgypcpss
-MAIL_FROM=soporte.tecnico@grupo-santoro.com.mx
+MAIL_PASSWORD=tu-password-de-app-gmail
+MAIL_FROM=tu-correo@dominio.com
 ```
 
 ### 3. MongoDB (Nuevo - REQUERIDO para Producción)
