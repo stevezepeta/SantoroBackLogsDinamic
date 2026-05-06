@@ -397,7 +397,6 @@ public class SantoroPanelService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
     private long countKeysByStatus(String status) {
         return apiKeyRep.findAll().stream()
                 .filter(k -> status.equalsIgnoreCase(k.getStatus()))

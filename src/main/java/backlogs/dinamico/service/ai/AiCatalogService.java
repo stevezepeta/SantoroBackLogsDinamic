@@ -29,7 +29,14 @@ public class AiCatalogService {
     private static final String F_TENANT = "tenant_id";
     private static final String F_SYS = "system";
 
-    public List<SystemCatalogItemDto> listSystems(ObjectId tenantId, String q, int limit) {
+    /**
+     * Lista los sistemas visibles para el usuario actual.
+     *
+     * @param allowedSystems null o vacío = sin restricción (ORG_ADMIN/ORG_OWNER);
+     *                       con elementos = filtrar sistema IN allowedSystems (VIEWER, etc.)
+     */
+    public List<SystemCatalogItemDto> listSystems(ObjectId tenantId, String q, int limit,
+                                                   List<String> allowedSystems) {
         if (tenantId == null) return List.of();
 
         int safeLimit = Math.min(Math.max(limit, 1), 200);
@@ -38,6 +45,17 @@ public class AiCatalogService {
                 .and(F_SYS).exists(true)
                 .ne(null)
                 .ne("");
+
+        // Aplicar restricción de sistemas si el usuario no es admin/orgWide irrestricto
+        if (allowedSystems != null && !allowedSystems.isEmpty()) {
+            List<String> normalizedCodes = allowedSystems.stream()
+                    .filter(s -> s != null && !s.isBlank())
+                    .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                    .distinct()
+                    .toList();
+            if (normalizedCodes.isEmpty()) return List.of();
+            c = c.and(F_SYS).in(normalizedCodes);
+        }
 
         Aggregation agg = Aggregation.newAggregation(
                 Aggregation.match(c),

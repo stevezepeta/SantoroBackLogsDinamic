@@ -1,9 +1,7 @@
 package backlogs.dinamico.service.logs;
 
-import backlogs.dinamico.api.dto.logs.DashboardGeoDto;
-import backlogs.dinamico.api.dto.logs.DashboardHttpDto;
-import backlogs.dinamico.api.dto.logs.DashboardSeriesDto;
-import backlogs.dinamico.api.dto.logs.DashboardStatsDto;
+import backlogs.dinamico.api.dto.logs.*;
+import backlogs.dinamico.config.AlertThresholdConfig;
 import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.infra.security.LogFilterCriteria;
 import backlogs.dinamico.security.auth.ScopeGuard;
@@ -22,10 +20,9 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
+import java.util.Date;
+import java.util.Arrays;
 import java.util.*;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -35,6 +32,7 @@ public class LogDashboardService {
     private static final String COLLECTION = "log_events";
     private static final int TOP_N = 20;
 
+    private final AlertThresholdConfig alertThresholdConfig;
     private final MongoTemplate mongoTemplate;
     private final ScopeGuard    scopeGuard;
 
@@ -151,6 +149,113 @@ public class LogDashboardService {
                 .latencyByStatusAndMethod(buckets)
                 .methodSummary(methodSummary)
                 .build();
+    }
+
+    /**
+     * Salud de todos los sistemas del tenant en las últimas 24 horas.
+     * INACTIVE = sin logs en las últimas 24h
+     * HEALTHY  = errorRate < umbral WARN
+     * WARN     = errorRate >= umbral WARN
+     * CRIT     = errorRate >= umbral CRIT
+     */
+    public List<SystemHealthDto> systemsHealth(Authentication auth) {
+        AuthUser user     = (AuthUser) auth.getPrincipal();
+        ObjectId tenantId = user.getTenantId();
+
+        // ── DEBUG TEMPORAL ────────────────────────────────────────────────────
+        log.info("[Health] tenantId: {}", tenantId);
+        log.info("[Health] isOrgWide: {}", user.isOrgWide());
+        log.info("[Health] roles: {}", user.getRoles());
+        // ─────────────────────────────────────────────────────────────────────
+
+        Instant from = Instant.now().minus(24, java.time.temporal.ChronoUnit.HOURS);
+        Instant to   = Instant.now();
+
+        // Obtener todos los sistemas del tenant
+        org.springframework.data.mongodb.core.query.Query q =
+                new org.springframework.data.mongodb.core.query.Query(
+                        Criteria.where("tenant_id").is(tenantId));
+        List<String> allSystems = mongoTemplate.findDistinct(
+                q, "system", "log_events", String.class);
+
+        // ── DEBUG TEMPORAL ────────────────────────────────────────────────────
+        log.info("[Health] sistemas encontrados: {}", allSystems);
+        // ─────────────────────────────────────────────────────────────────────
+
+        List<SystemHealthDto> result = new ArrayList<>();
+
+        for (String system : allSystems) {
+            if (system == null || system.isBlank()) continue;
+
+            // Saltar sistemas a los que el usuario no tiene acceso
+            boolean isAdminOrOwner = user.getRoles() != null &&
+                    (user.getRoles().contains("ORG_ADMIN") ||
+                            user.getRoles().contains("ORG_OWNER"));
+            boolean isUnrestricted = isAdminOrOwner ||
+                    (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()));
+
+            if (!isUnrestricted) {
+                List<String> allowed = user.getAllowedSystems() != null
+                        ? user.getAllowedSystems() : List.of();
+                if (!allowed.contains(system)) continue;
+            }
+
+            // Contar eventos de las últimas 24h para este sistema
+            MatchOperation matchOp = Aggregation.match(new Criteria().andOperator(
+                    Criteria.where("tenant_id").is(tenantId),
+                    Criteria.where("system").is(system),
+                    Criteria.where("eventTime").gte(Date.from(from)).lt(Date.from(to))
+            ));
+
+            GroupOperation groupOp = Aggregation.group()
+                    .count().as("total")
+                    .sum(new AggregationExpression() {
+                        @Override
+                        public Document toDocument(AggregationOperationContext ctx) {
+                            return new Document("$cond", Arrays.asList(
+                                    new Document("$eq", Arrays.asList("$outcome", "FAILURE")),
+                                    1, 0));
+                        }
+                    }).as("failures");
+
+            AggregationResults<Document> aggResult = mongoTemplate.aggregate(
+                    Aggregation.newAggregation(matchOp, groupOp),
+                    "log_events", Document.class);
+
+            Document stats = aggResult.getUniqueMappedResult();
+            long total    = stats != null ? ((Number) stats.getOrDefault("total",    0)).longValue() : 0L;
+            long failures = stats != null ? ((Number) stats.getOrDefault("failures", 0)).longValue() : 0L;
+
+            log.info("[Health] sistema={} total={} failures={}", system, total, failures);
+
+            if (total == 0) {
+                result.add(new SystemHealthDto(system, "INACTIVE", 0, 0, 0));
+                continue;
+            }
+
+            double errorRate = (double) failures / total;
+
+            // Usar los umbrales configurados para este sistema
+            backlogs.dinamico.config.AlertThresholdConfig.Thresholds t =
+                    alertThresholdConfig.getThresholds(system);
+
+            String status;
+            if (errorRate >= t.crit())      status = "CRIT";
+            else if (errorRate >= t.warn()) status = "WARN";
+            else                            status = "HEALTHY";
+
+            result.add(new SystemHealthDto(system, status, errorRate, total, failures));
+        }
+
+        // Ordenar: CRIT primero, luego WARN, luego HEALTHY, luego INACTIVE
+        result.sort(Comparator.comparingInt(s -> switch (s.status()) {
+            case "CRIT"     -> 0;
+            case "WARN"     -> 1;
+            case "HEALTHY"  -> 2;
+            default         -> 3;
+        }));
+
+        return result;
     }
 
     // ── GEO ───────────────────────────────────────────────────────────────────

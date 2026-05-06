@@ -29,17 +29,16 @@ public class SeverityNormalizer {
             reasonCode = up(e.getReason().getCode());
         }
 
-        // 1) Si el status ya indica error, manda a ERROR
+        // Si el status ya indica error, manda a ERROR
         if ("ERROR".equals(status) || "FATAL".equals(status)) {
             return "ERROR";
         }
 
-        // 2) Si outcome/reason trae "ERR", considerarlo ERROR operacional
+        // Si outcome/reason trae "ERR", considerarlo ERROR operacional
         if (containsErr(outcome) || containsErr(reasonCode)) {
             return "ERROR";
         }
 
-        // 3) Si raw ya viene en tu estándar, respétalo
         switch (raw) {
             case "DEBUG":
             case "TRACE":
@@ -55,7 +54,7 @@ public class SeverityNormalizer {
                 return "FATAL";
         }
 
-        // 4) Mapeo Elyctis
+        // Mapeo Elyctis
         return switch (raw) {
             case "LOW" -> "INFO";
             case "MEDIUM" -> "WARN";

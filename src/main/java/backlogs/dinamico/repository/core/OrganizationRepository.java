@@ -2,6 +2,7 @@ package backlogs.dinamico.repository.core;
 
 import backlogs.dinamico.model.core.Organization;
 
+import java.util.List;
 import java.util.Optional;
 
 import org.bson.types.ObjectId;
@@ -26,5 +27,7 @@ public interface OrganizationRepository extends MongoRepository<Organization, Ob
           String name, String domain, String code, Pageable pageable);
 
   Optional<OrganizationRateLimitView> findProjectedById(ObjectId id);
+
+  List<Organization> findByStatusNot(String status);
 
 }

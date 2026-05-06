@@ -10,6 +10,7 @@ import backlogs.dinamico.repository.log.LogEventRepository;
 import backlogs.dinamico.security.auth.ScopeGuard;
 import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.bson.types.ObjectId;
 import org.springframework.data.domain.*;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -25,6 +26,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class LogEventService {
@@ -35,6 +37,9 @@ public class LogEventService {
     private final MongoTemplate mongoTemplate;
     private final ScopeGuard scopeGuard;
     private final DashboardNotifier dashboardNotifier;
+    private final EventTypeNormalizer eventTypeNormalizer;
+
+    private final DeviceRegistryService deviceRegistryService;
 
     // ── ALL ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +47,7 @@ public class LogEventService {
             Authentication auth,
             String system,       // ← NUEVO
             String eventType,    // ← NUEVO
+            String eventCode,
             String status,       // ← NUEVO
             String outcome,      // ← NUEVO
             String severity,     // ← NUEVO
@@ -70,8 +76,13 @@ public class LogEventService {
             scopeGuard.requireSystemAccess(user, systemNorm);
             cs.add(Criteria.where("system").is(systemNorm));
         } else {
+
+            boolean isAdminOrOwner = user.getRoles() != null &&
+                    (user.getRoles().contains("ORG_ADMIN") ||
+                        user.getRoles().contains("ORG_OWNER"));
+
             // Sin system explícito → scope normal del usuario
-            if (!user.isOrgWide()) {
+            if (!user.isOrgWide() && !isAdminOrOwner) {
                 var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
                         : user.getAllowedSystems().stream()
                         .filter(StringUtils::hasText)
@@ -91,7 +102,7 @@ public class LogEventService {
         }
 
         // ── FILTROS ADICIONALES ───────────────────────────────────────────────
-        if (StringUtils.hasText(eventType)) cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
+        applyEventTypeFilter(cs, eventType, eventCode);
         if (StringUtils.hasText(status))    cs.add(Criteria.where("status").is(normalizeUpper(status)));
         if (StringUtils.hasText(outcome))   cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
         if (StringUtils.hasText(severity))  cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
@@ -131,6 +142,7 @@ public class LogEventService {
             Instant to,
             String caseId,
             String eventType,
+            String eventCode,
             String status,
             String outcome,
             String severity,
@@ -156,13 +168,19 @@ public class LogEventService {
         List<Criteria> cs = new ArrayList<>();
         cs.add(Criteria.where("tenant_id").is(tenantId));
 
+        boolean isAdminOrOwner = user.getRoles() != null &&
+                (user.getRoles().contains("ORG_ADMIN") ||
+                        user.getRoles().contains("ORG_OWNER"));
+
         // SCOPE / SYSTEM FILTER
         if (StringUtils.hasText(system)) {
-            scopeGuard.requireSystemAccess(user, system);
+            if(!isAdminOrOwner) {
+                scopeGuard.requireSystemAccess(user, system);
+            }
             cs.add(Criteria.where("system").is(system));
         } else {
-            if (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty())) {
-                // orgWide sin restricción → ve todos
+            if (isAdminOrOwner || (user.isOrgWide() &&
+                    (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()))) {
             } else {
                 var allowed = (user.getAllowedSystems() == null) ? List.<String>of()
                         : user.getAllowedSystems().stream()
@@ -186,7 +204,7 @@ public class LogEventService {
 
         // FILTROS del request (los del usuario pueden quedar anulados por logFilters si se solapan)
         if (StringUtils.hasText(caseId))     cs.add(Criteria.where("caseId").is(normalize(caseId)));
-        if (StringUtils.hasText(eventType))  cs.add(Criteria.where("eventType").is(normalizeUpper(eventType)));
+        applyEventTypeFilter(cs, eventType, eventCode);
         if (StringUtils.hasText(status))     cs.add(Criteria.where("status").is(normalizeUpper(status)));
         if (StringUtils.hasText(outcome))    cs.add(Criteria.where("outcome").is(normalizeUpper(outcome)));
         if (StringUtils.hasText(severity))   cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
@@ -344,6 +362,9 @@ public class LogEventService {
         String caseId = normalize(req.caseId());
         Instant eventTime = (req.eventTime() != null) ? req.eventTime() : Instant.now();
 
+        EventTypeNormalizer.NormalizedEventType evType =
+                eventTypeNormalizer.normalize(req.eventType());
+
         String severityRaw  = normalizeUpper(req.severity());
         String severityNorm = LogNormalizationUtils.normalizeSeverity(severityRaw);
         String statusNorm   = normalizeUpper(req.status());
@@ -361,7 +382,11 @@ public class LogEventService {
                 .environment(env)
                 .caseId(caseId)
                 .eventTime(eventTime)
-                .eventType(normalizeUpper(req.eventType()))
+
+                .eventType(evType.category())     // "APP_EVENT"
+                .eventCode(evType.code())         // "1034"
+                .eventTypeRaw(evType.raw())       // "APP_EVENT_1034"
+
                 .status(statusNorm)
                 .outcome(outcomeNorm)
                 .severity(severityNorm)
@@ -410,9 +435,74 @@ public class LogEventService {
                 )
                 .payload(req.payload())
                 .meta(req.meta())
+                .remoteConnection(req.remoteConnection() == null ? null : new LogEvent.RemoteConnection(
+                        req.remoteConnection().sourceIp(),
+                        req.remoteConnection().sourcePort(),
+                        req.remoteConnection().destinationIp(),
+                        req.remoteConnection().destinationPort(),
+                        req.remoteConnection().protocol(),
+                        req.remoteConnection().authMethod(),
+                        req.remoteConnection().authResult(),
+                        req.remoteConnection().user(),
+                        req.remoteConnection().sessionId(),
+                        req.remoteConnection().sessionDuration(),
+                        req.remoteConnection().clientType(),
+                        req.remoteConnection().sourceCountry(),
+                        req.remoteConnection().sourceCity(),
+                        req.remoteConnection().isLocalNetwork(),
+                        req.remoteConnection().riskScore(),
+                        req.remoteConnection().metadata()
+                ))
                 .build();
 
         LogEvent saved = repo.save(event);
+
+        // ── Auto-registro de dispositivo ──────────────────────────────────────────
+        try {
+            String devId     = saved.getCaseId();
+            String devSystem = saved.getSystem();
+            String devType   = null;
+            String devIp     = null;
+            String devHost   = null;
+            String devEvent  = saved.getEventType();
+
+            if (saved.getActor() != null) {
+                devType = saved.getActor().getType();
+                devHost = saved.getActor().getFullName();
+            }
+
+            if (saved.getMeta() != null) {
+                Object ipObj = saved.getMeta().get("ip");
+                devIp = ipObj != null ? ipObj.toString() : null;
+            }
+
+            Double lat = null, lng = null;
+            String locName = null;
+
+            if (saved.getGeo() != null
+                    && saved.getGeo().getCoordinates() != null
+                    && saved.getGeo().getCoordinates().size() >= 2) {
+                lng = saved.getGeo().getCoordinates().get(0);
+                lat = saved.getGeo().getCoordinates().get(1);
+            }
+
+            if (saved.getLocation() != null) {
+                locName = saved.getLocation().getName();
+            }
+
+            log.info("[LogEvent] Registrando dispositivo: devId={}, system={}, type={}, ip={}, lat={}, lng={}, loc={}",
+                    devId, devSystem, devType, devIp, lat, lng, locName);
+
+            deviceRegistryService.upsertFromLog(
+                    saved.getTenantId(), devId, devSystem, devType, devIp, devHost,
+                    lat, lng, locName, devEvent
+            );
+
+            log.info("[LogEvent] Dispositivo registrado OK: {}", devId);
+
+        } catch (Exception e) {
+            log.error("[LogEvent] Error registrando dispositivo: {}", e.getMessage(), e);
+        }
 
         // ── Notificar dashboard en tiempo real ───────────────────────────────
         dashboardNotifier.notifyNewLog(tenantId, saved.getSystem());
@@ -421,6 +511,33 @@ public class LogEventService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+    private void applyEventTypeFilter(List<Criteria> cs, String eventType, String eventCode) {
+
+        // Si viene un eventType crudo tipo "APP_EVENT_1034", lo normalizamos
+        if (StringUtils.hasText(eventType)) {
+            EventTypeNormalizer.NormalizedEventType normalized =
+                    eventTypeNormalizer.normalize(eventType);
+
+            // Siempre filtra por categoría
+            cs.add(Criteria.where("eventType").is(normalized.category()));
+
+            // Si el raw tenía código numérico ("APP_EVENT_1034"),
+            // lo agrega como filtro adicional de eventCode
+            if (StringUtils.hasText(normalized.code())) {
+                cs.add(Criteria.where("eventCode").is(normalized.code()));
+            }
+            // Si además viene eventCode explícito, tiene prioridad sobre el extraído del raw
+            else if (StringUtils.hasText(eventCode)) {
+                cs.add(Criteria.where("eventCode").is(eventCode.trim()));
+            }
+            return;
+        }
+
+        // Si no viene eventType pero sí eventCode solo (ej: buscar todos los "1034" sin importar categoría)
+        if (StringUtils.hasText(eventCode)) {
+            cs.add(Criteria.where("eventCode").is(eventCode.trim()));
+        }
+    }
 
     private static String normalize(String v) {
         if (v == null) return null;

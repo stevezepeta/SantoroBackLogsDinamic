@@ -9,7 +9,6 @@ import org.springframework.util.StringUtils;
 
 import java.time.Instant;
 import java.time.ZoneId;
-import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
@@ -27,11 +26,22 @@ public class DailyManagerBriefService {
 
     private final DailySummaryService dailySummaryService;
 
+    /**
+     * Overload sin system — mantiene compatibilidad hacia atrás (resumen global del tenant).
+     */
     public DailyManagerBriefDto build(ObjectId tenantId, String tz, Instant from, Instant to) {
+        return build(tenantId, tz, from, to, null);
+    }
+
+    /**
+     * Construye el brief ejecutivo diario filtrando opcionalmente por sistema.
+     * Si {@code system} es null o vacío, resume todos los sistemas del tenant.
+     */
+    public DailyManagerBriefDto build(ObjectId tenantId, String tz, Instant from, Instant to, String system) {
 
         ZoneId zone = safeZone(tz);
 
-        // Queremos “días completos” (como tu dailySummary):
+        // Queremos "días completos" (como tu dailySummary):
         // Por default: hasta el inicio del día de HOY (local) para resumir AYER completo.
         Instant now = Instant.now();
         Instant end = ((to != null) ? to : now).atZone(zone).truncatedTo(ChronoUnit.DAYS).toInstant();
@@ -41,7 +51,12 @@ public class DailyManagerBriefService {
                 ? from
                 : end.minus(2, ChronoUnit.DAYS);
 
-        DailySummaryDto s = dailySummaryService.buildDailySummary(tenantId, 2, zone.getId(), start, end);
+        // ── CORRECCIÓN: pasar el filtro de sistema a DailySummaryService ──────
+        // Sin esto, buildDailySummary consulta TODOS los sistemas del tenant
+        // y los campos executiveSummary / keyPoints mezclan contextos entre sistemas.
+        String effectiveSystem = StringUtils.hasText(system) ? system.trim().toUpperCase(Locale.ROOT) : null;
+
+        DailySummaryDto s = dailySummaryService.buildDailySummary(tenantId, 2, zone.getId(), start, end, effectiveSystem);
 
         List<DailySummaryDto.Bucket> buckets = (s.buckets == null) ? List.of() : s.buckets;
         DailySummaryDto.Bucket cur = buckets.isEmpty() ? null : buckets.get(buckets.size() - 1);
@@ -49,6 +64,7 @@ public class DailyManagerBriefService {
 
         DailyManagerBriefDto out = new DailyManagerBriefDto();
         out.tz = zone.getId();
+        out.system = effectiveSystem;  // ← informar al cliente qué sistema se usó
 
         // Ventana real (lo que usó el daily summary)
         out.windowFrom = s.from;

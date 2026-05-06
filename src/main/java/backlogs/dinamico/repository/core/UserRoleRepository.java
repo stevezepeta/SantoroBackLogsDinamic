@@ -15,4 +15,7 @@ public interface UserRoleRepository extends MongoRepository<UserRole, ObjectId> 
     void deleteByTenantIdAndUserId(ObjectId tenantId, ObjectId userId);
 
     void deleteByTenantIdAndUserIdAndRoleId(ObjectId tenantId, ObjectId userId, ObjectId roleId);
+
+    // En UserRoleRepository.java
+    List<UserRole> findByTenantId(ObjectId tenantId);
 }

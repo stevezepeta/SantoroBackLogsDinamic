@@ -54,7 +54,6 @@ public class WebAuthController {
     private final QrLoginService qrLoginService;
 
     // ── Login ─────────────────────────────────────────────────────────────────
-
     @PostMapping(value = "/login", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ApiResponse<Map<String, Object>> login(@RequestBody LoginReq req) {
 
@@ -98,7 +97,6 @@ public class WebAuthController {
         String accessToken  = tokens.generateAccess(u, tenantId, ctx);
         String refreshToken = tokens.generateRefresh(u, tenantId, ctx);
 
-        // ── NUEVO: 4. Flag mustChangePassword ─────────────────────────────────
         // Si el usuario tiene contraseña temporal, se le indica al frontend.
         // El frontend debe redirigir al formulario de cambio de password.
         // No se bloquea el token — el frontend es responsable de forzar el flujo.
@@ -121,13 +119,12 @@ public class WebAuthController {
         ));
         data.put("accessToken",          accessToken);
         data.put("refreshToken",         refreshToken);
-        data.put("mustChangePassword",   mustChange);  // ← NUEVO campo en la respuesta
+        data.put("mustChangePassword",   mustChange);
 
         return ApiResponse.ok("Login exitoso", null, data);
     }
 
     // ── Refresh ───────────────────────────────────────────────────────────────
-
     @PostMapping("/refresh")
     public ResponseEntity<ApiResponse<Map<String, Object>>> refresh(
             @Valid @RequestBody RefreshTokenRequest req) {
@@ -208,17 +205,6 @@ public class WebAuthController {
     }
 
     // ── Change Password ───────────────────────────────────────────────────────
-
-    /**
-     * Cambia la contraseña del usuario autenticado.
-     *
-     * Primera vez (mustChangePassword=true):
-     *   currentPassword = la contraseña temporal que recibió
-     *   newPassword     = la que quiere usar de ahora en adelante
-     *
-     * Cambio voluntario (cualquier momento):
-     *   Mismo flujo — siempre se valida la contraseña actual.
-     */
     @PostMapping("/change-password")
     public ApiResponse<Map<String, Object>> changePassword(
             @RequestBody ChangePasswordReq req,

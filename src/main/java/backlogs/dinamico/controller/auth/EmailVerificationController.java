@@ -16,16 +16,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
-/**
- * Endpoints del flujo de verificación de email por OTP.
- *
- * Paso 1 → POST /api/email/verify/send      — enviar OTP
- * Paso 2 → POST /api/email/verify/confirm   — validar OTP → recibir verificationToken
- *
- * El verificationToken se usa en:
- *   - POST /api/admin/invites               (campo: verificationToken)
- *   - POST /api/santoro/panel/organizations (campo: verificationToken en adminEmail)
- */
+
 @Tag(name = "Email Verification", description = "Verificación de email por OTP antes de invitar o crear usuarios.")
 @SecurityRequirement(name = "bearerAuth")
 @RestController

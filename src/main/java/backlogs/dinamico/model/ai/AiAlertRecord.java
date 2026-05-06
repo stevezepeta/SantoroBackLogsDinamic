@@ -40,10 +40,6 @@ public class AiAlertRecord {
     private Instant windowFrom;
     private Instant windowTo;
 
-    /**
-     * Para series: debe ser SIEMPRE el inicio del bucket (hora o día).
-     * Si queda null, no podrás hacer tendencia bien.
-     */
     private Instant bucketStart;
 
     private Instant createdAt;
@@ -75,10 +71,6 @@ public class AiAlertRecord {
     private String topSystem;
     private String topErrorKey;
 
-    /**
-     * Dedupe por bucket.
-     * Recomendación: tenantId|granularity|bucketStart
-     */
     private String fingerprint;
 
     // Operación/flujo de atención (si lo usas)

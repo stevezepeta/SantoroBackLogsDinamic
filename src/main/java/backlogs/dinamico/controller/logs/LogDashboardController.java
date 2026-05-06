@@ -12,6 +12,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.util.List;
 
 
 @Tag(name = "Dashboard", description = "Agregaciones para el dashboard — reemplaza el GET /all en el frontend.")
@@ -79,5 +80,13 @@ public class LogDashboardController {
     ) {
         return ApiResponse.ok("Dashboard geo", "dashboard_geo",
                 dashboardService.geo(auth, system, from, to));
+    }
+
+    @Operation(summary = "Estado de salud de todos los sistemas — últimas 24h")
+    @GetMapping("/systems-health")
+    @PreAuthorize("hasAuthority('PERM_LOG_READ')")
+    public ApiResponse<List<SystemHealthDto>> systemsHealth(Authentication auth) {
+        return ApiResponse.ok("Systems health", "systems_health",
+                dashboardService.systemsHealth(auth));
     }
 }

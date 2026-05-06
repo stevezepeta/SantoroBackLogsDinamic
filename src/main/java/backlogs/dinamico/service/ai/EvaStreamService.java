@@ -32,6 +32,8 @@ public class EvaStreamService {
     private final AiAlertRepository     alertRepo;
     private final MongoTemplate         mongoTemplate;
 
+    private final EvaDeepAnalysisService deepAnalysisService;
+
     /**
      * @param req     Parámetros de la petición (incluye tenantId, allowedSystems, etc.)
      * @param onChunk Callback — se llama por cada fragmento de texto listo
@@ -58,6 +60,10 @@ public class EvaStreamService {
                 null, null,
                 systemFilter, req.getAllowedSystems()
         );
+
+        Instant from = Instant.now().minusSeconds((long) req.getDays() * 24 * 60 * 60);
+        Instant to = Instant.now();
+        summary.aiDeepAnalysis = deepAnalysisService.analyze(tenantId, systemFilter, from, to, summary);
 
         emitInChunks(buildSummaryNarrative(summary, systemFilter), onChunk, 40);
     }
@@ -285,6 +291,32 @@ public class EvaStreamService {
             sb.append("\n**Acciones recomendadas:**\n");
             for (String action : s.actions) sb.append("- ").append(action).append("\n");
         }
+
+        // ── NUEVO: análisis profundo generado por IA ──────────────────────────
+        if (s.aiDeepAnalysis != null) {
+            sb.append("\n---\n");
+            sb.append("**🤖 Análisis generado por IA — Evento dominante: `")
+                    .append(s.aiDeepAnalysis.dominantEventType()).append("`**")
+                    .append(" (").append(s.aiDeepAnalysis.dominantCount()).append(" ocurrencias)\n\n");
+
+            if (s.aiDeepAnalysis.aiSummary() != null) {
+                sb.append("**¿Qué está pasando?**\n")
+                        .append(s.aiDeepAnalysis.aiSummary()).append("\n\n");
+            }
+
+            if (s.aiDeepAnalysis.aiSuggestions() != null) {
+                sb.append("**Acciones específicas sugeridas:**\n");
+                // Convertir las sugerencias separadas por \n en bullets
+                String[] suggestions = s.aiDeepAnalysis.aiSuggestions().split("\n");
+                for (String sug : suggestions) {
+                    if (!sug.isBlank()) {
+                        String line = sug.trim().startsWith("-") ? sug.trim() : "- " + sug.trim();
+                        sb.append(line).append("\n");
+                    }
+                }
+            }
+        }
+
         return sb.toString();
     }
 

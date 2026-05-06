@@ -173,7 +173,9 @@ public class AiDailyManagerService {
         ZoneId zone = safeZone(tz);
         TimeRange r = lastNDaysComplete(zone, days, from, to);
 
-        DailyManagerSummaryDto mgr = buildManagerSummary(tenantId, days, zone.getId(), r.from, r.to);
+        // ── CORRECCIÓN: pasar system y allowedSystems para que el summary
+        // base no mezcle datos de otros sistemas al generar ticket drafts ──
+        DailyManagerSummaryDto mgr = buildManagerSummary(tenantId, days, zone.getId(), r.from, r.to, system, null);
 
         Instant rangeFrom = r.from;
         Instant rangeTo = r.to;
