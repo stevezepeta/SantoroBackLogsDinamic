@@ -8,6 +8,7 @@ import org.springframework.data.mongodb.core.index.CompoundIndexes;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.Map;
 
 @Getter
 @Setter
@@ -30,7 +31,18 @@ public class Device {
     private String system;
     private String type;
 
+    /** IP principal (última reportada) — se mantiene para compatibilidad con el mapa del frontend */
     private String ip;
+
+    /**
+     * Mapa de interfaces de red detectadas automáticamente.
+     * Clave: "privada" | "publica" | "loopback"
+     * Valor: la IP correspondiente.
+     * Ejemplo: {"privada": "192.168.100.8", "publica": "187.188.66.56"}
+     */
+    @Builder.Default
+    private Map<String, String> ipInterfaces = new java.util.LinkedHashMap<>();
+
     private Double latitude;
     private Double longitude;
     private String locationName;

@@ -459,7 +459,6 @@ public class LogEventService {
 
         // ── Auto-registro de dispositivo ──────────────────────────────────────────
         try {
-            String devId     = saved.getCaseId();
             String devSystem = saved.getSystem();
             String devType   = null;
             String devIp     = null;
@@ -475,6 +474,13 @@ public class LogEventService {
                 Object ipObj = saved.getMeta().get("ip");
                 devIp = ipObj != null ? ipObj.toString() : null;
             }
+
+            // Clave de deduplicación: hostname identifica la máquina física.
+            // Si el mismo servidor envía logs con IP privada y pública, ambos
+            // apuntan al mismo deviceId y se consolidan en UN solo documento.
+            String devId = (devHost != null && !devHost.isBlank())
+                    ? devHost
+                    : saved.getCaseId();
 
             Double lat = null, lng = null;
             String locName = null;

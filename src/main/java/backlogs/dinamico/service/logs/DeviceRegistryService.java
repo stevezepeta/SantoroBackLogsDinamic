@@ -24,7 +24,13 @@ public class DeviceRegistryService {
 
     private static final long OFFLINE_THRESHOLD_MINUTES = 10;
 
-    // Registra o actualiza un dispositivo cuando llega un log
+    /**
+     * Registra o actualiza un dispositivo cuando llega un log.
+     *
+     * Clave de deduplicación: hostname (identifica la máquina física).
+     * Si el mismo servidor reporta con IP privada y con IP pública, ambas se
+     * almacenan en {@code ipInterfaces} y se consolida en UN solo documento.
+     */
     public void upsertFromLog(ObjectId tenantId, String deviceId, String system,
                               String type, String ip, String hostname,
                               Double latitude, Double longitude,
@@ -45,14 +51,23 @@ public class DeviceRegistryService {
                 .setOnInsert("firstSeen", Instant.now());
 
         // Actualizar solo si no es null
-        if (type != null && !type.isBlank()) update.set("type", type);
-        if (ip != null && !ip.isBlank())             update.set("ip", ip);
+        if (type != null && !type.isBlank())         update.set("type", type);
         if (hostname != null && !hostname.isBlank()) update.set("hostname", hostname);
         if (latitude != null)                        update.set("latitude", latitude);
         if (longitude != null)                       update.set("longitude", longitude);
         if (locationName != null && !locationName.isBlank()) update.set("locationName", locationName);
 
-        // Detectar encendido/apagado
+        // ── Consolidación de IPs ─────────────────────────────────────────────
+        // `ip` guarda la última IP reportada (backward compat con frontend).
+        // `ipInterfaces.<tipo>` acumula TODAS las IPs sin sobreescribir las anteriores:
+        //   {"privada": "192.168.100.8", "publica": "187.188.66.56"}
+        if (ip != null && !ip.isBlank()) {
+            update.set("ip", ip);
+            String ifaceKey = classifyIp(ip);                       // "privada" | "publica" | "loopback"
+            update.set("ipInterfaces." + ifaceKey, ip);             // $set anidado → no borra las otras
+        }
+
+        // ── Detectar encendido/apagado ───────────────────────────────────────
         if (eventType != null) {
             switch (eventType) {
                 case "SYSTEM_STARTUP", "SYSTEM_BOOT_INFO" ->
@@ -67,6 +82,30 @@ public class DeviceRegistryService {
         } catch (Exception e) {
             log.warn("[DeviceRegistry] Error registrando dispositivo {}: {}", deviceId, e.getMessage());
         }
+    }
+
+    /**
+     * Clasifica una IP según su rango:
+     * <ul>
+     *   <li><b>privada</b>: 10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x</li>
+     *   <li><b>loopback</b>: ::1</li>
+     *   <li><b>publica</b>: cualquier otra</li>
+     * </ul>
+     */
+    private static String classifyIp(String ip) {
+        if (ip == null || ip.isBlank()) return "desconocida";
+        String t = ip.trim();
+        if (t.equals("::1") || t.equals("0:0:0:0:0:0:0:1")) return "loopback";
+        if (t.startsWith("127.") || t.startsWith("169.254.")) return "privada";
+        if (t.startsWith("10.") || t.startsWith("192.168."))  return "privada";
+        if (t.startsWith("172.")) {
+            try {
+                String[] parts = t.split("\\.");
+                int second = Integer.parseInt(parts[1]);
+                if (second >= 16 && second <= 31) return "privada";
+            } catch (Exception ignored) { /* sigue a publica */ }
+        }
+        return "publica";
     }
 
     // Devuelve todos los dispositivos de un tenant con status calculado, filtrando opcionalmente por system y status

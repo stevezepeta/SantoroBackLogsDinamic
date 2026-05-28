@@ -78,7 +78,8 @@ public class SecurityConfig {
                             "/api/auth/refresh",
                             "/api/auth/accept-invite",
                             "/api/auth/forgot-password",
-                            "/api/auth/reset-password"
+                            "/api/auth/reset-password",
+                            "/api/auth/validate-external"
                     ).permitAll();
                     auth.requestMatchers(HttpMethod.GET, "/api/auth/qr-token").permitAll();
                     auth.requestMatchers(HttpMethod.POST, "/api/auth/qr-login").authenticated();
