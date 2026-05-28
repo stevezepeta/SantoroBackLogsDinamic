@@ -50,7 +50,12 @@ deploy:
 
   before_script:
     - echo "Instalando dependencias..."
-    - yum install -y openssh-clients curl
+    - yum install -y openssh-clients curl unzip
+    - echo "Instalando AWS CLI..."
+    - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+    - unzip -q awscliv2.zip
+    - ./aws/install
+    - aws --version
     - eval $(ssh-agent -s)
     - echo "$EC2_PRIVATE_KEY" | tr -d '\r' > /tmp/ec2_key
     - chmod 600 /tmp/ec2_key
