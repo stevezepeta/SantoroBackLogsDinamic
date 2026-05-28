@@ -64,14 +64,6 @@ deploy:
     - chmod 700 ~/.ssh
     - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
     - chmod 644 ~/.ssh/known_hosts
-    - |
-      echo "Obteniendo IP publica del runner y configurando SG..."
-      export RUNNER_IP=$(curl -s https://checkip.amazonaws.com)
-      echo "IP del runner: $RUNNER_IP"
-      export SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=sg_backend_java --query 'SecurityGroups[0].GroupId' --output text --region $AWS_DEFAULT_REGION)
-      echo "Security Group ID: $SG_ID"
-      aws ec2 authorize-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$RUNNER_IP/32" --region $AWS_DEFAULT_REGION
-      echo "Regla de ingress agregada para $RUNNER_IP/32"
 
   script:
     - echo "Subiendo JAR a S3"
@@ -93,13 +85,6 @@ deploy:
           sleep 10
         fi
       done
-
-  after_script:
-    - |
-      echo "Limpiando regla de ingress temporal del SG..."
-      RUNNER_IP=$(curl -s https://checkip.amazonaws.com)
-      SG_ID=$(aws ec2 describe-security-groups --filters Name=group-name,Values=sg_backend_java --query 'SecurityGroups[0].GroupId' --output text --region $AWS_DEFAULT_REGION)
-      aws ec2 revoke-security-group-ingress --group-id "$SG_ID" --protocol tcp --port 22 --cidr "$RUNNER_IP/32" --region $AWS_DEFAULT_REGION || echo "Regla ya removida o no existia"
 
   environment:
     name: production
