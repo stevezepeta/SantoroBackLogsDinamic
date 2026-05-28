@@ -65,14 +65,57 @@ deploy:
     - aws s3 cp target/*.jar "s3://$S3_BACKEND_BUCKET/app.jar" --region $AWS_DEFAULT_REGION
     - echo "JAR subido exitosamente a S3"
     - echo "Enviando comando de deploy via AWS Systems Manager SSM..."
-    - COMMAND_ID=$(aws ssm send-command --instance-ids "$EC2_INSTANCE_ID" --document-name "AWS-RunShellScript" --comment "Deploy backend JAR" --parameters commands="[\"aws s3 cp s3://$S3_BACKEND_BUCKET/app.jar /tmp/app.jar --region $AWS_DEFAULT_REGION\",\"sudo mv /tmp/app.jar /opt/backend/app.jar\",\"sudo systemctl daemon-reload\",\"sudo systemctl restart springboot-app\",\"echo Deploy completado exitosamente\"]" --region $AWS_DEFAULT_REGION --query 'Command.CommandId' --output text)
-    - echo "Command ID $COMMAND_ID"
-    - echo "Esperando resultado del comando SSM..."
-    - for i in $(seq 1 30); do RESULT=$(aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query 'CommandInvocations[0].{Status:Status,Output:CommandPlugins[0].Output}' --output json --region $AWS_DEFAULT_REGION); STATUS=$(echo "$RESULT" | jq -r '.Status'); echo "Estado SSM $STATUS"; if [ "$STATUS" = "Success" ]; then echo "$RESULT" | jq -r '.Output'; break; elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then echo "Error en SSM $STATUS"; echo "$RESULT" | jq -r '.Output'; exit 1; fi; sleep 5; done
-    - echo "Esperando inicio de aplicacion..."
+    - |
+      DEPLOY_CMD=$(cat <<'EOF'
+      set -e
+      echo "=== Deploy iniciado ==="
+      aws s3 cp s3://BUCKET/app.jar /tmp/app.jar --region REGION
+      sudo mv /tmp/app.jar /opt/backend/app.jar
+      sudo systemctl daemon-reload
+      echo "=== Deteniendo app completamente ==="
+      sudo systemctl stop springboot-app || true
+      sleep 3
+      sudo fuser -k 8080/tcp || true
+      sleep 2
+      echo "=== Iniciando app ==="
+      sudo systemctl start springboot-app
+      echo "=== Esperando arranque de Spring Boot (60s) ==="
+      sleep 60
+      echo "=== Health check local ==="
+      for i in $(seq 1 10); do
+        if curl -sf --max-time 5 http://localhost:8080/actuator/health >/dev/null 2>&1; then
+          echo "Health check local PASADO"
+          break
+        else
+          echo "Health check local intento $i fallo, esperando 10s..."
+          sleep 10
+        fi
+      done
+      echo "=== Deploy completado exitosamente ==="
+      EOF
+      )
+      DEPLOY_CMD=$(echo "$DEPLOY_CMD" | sed "s|BUCKET|$S3_BACKEND_BUCKET|g; s|REGION|$AWS_DEFAULT_REGION|g")
+      COMMAND_ID=$(aws ssm send-command --instance-ids "$EC2_INSTANCE_ID" --document-name "AWS-RunShellScript" --comment "Deploy backend JAR limpio" --parameters commands="[$DEPLOY_CMD]" --region $AWS_DEFAULT_REGION --query 'Command.CommandId' --output text)
+      echo "Command ID $COMMAND_ID"
+      echo "Esperando resultado del comando SSM..."
+      for i in $(seq 1 60); do
+        RESULT=$(aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query 'CommandInvocations[0].{Status:Status,Output:CommandPlugins[0].Output}' --output json --region $AWS_DEFAULT_REGION)
+        STATUS=$(echo "$RESULT" | jq -r '.Status')
+        if [ "$i" = "1" ] || [ "$((i % 10))" = "0" ]; then echo "Estado SSM: $STATUS (intento $i/60)"; fi
+        if [ "$STATUS" = "Success" ]; then
+          echo "$RESULT" | jq -r '.Output'
+          break
+        elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+          echo "Error en SSM: $STATUS"
+          echo "$RESULT" | jq -r '.Output'
+          exit 1
+        fi
+        sleep 5
+      done
+    - echo "Esperando propagacion por Cloudflare Tunnel..."
     - sleep 15
-    - echo "Ejecutando health check..."
-    - for i in 1 2 3 4 5; do STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api-logs.grupo-santoro.com.mx/actuator/health || echo "000"); if [ "$STATUS" = "200" ] || [ "$STATUS" = "404" ]; then echo "Health check pasado HTTP $STATUS"; break; else echo "Intento $i HTTP $STATUS reintentando en 10s..."; sleep 10; fi; done
+    - echo "Ejecutando health check publico..."
+    - for i in 1 2 3 4 5; do STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api-logs.grupo-santoro.com.mx/actuator/health || echo "000"); if [ "$STATUS" = "200" ] || [ "$STATUS" = "404" ]; then echo "Health check publico pasado HTTP $STATUS"; break; else echo "Intento $i HTTP $STATUS reintentando en 10s..."; sleep 10; fi; done
 
   environment:
     name: production
