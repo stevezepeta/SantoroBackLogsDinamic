@@ -50,33 +50,53 @@ deploy:
 
   before_script:
     - echo "Instalando dependencias..."
-    - yum install -y openssh-clients curl unzip
+    - yum install -y curl unzip jq
     - echo "Instalando AWS CLI..."
     - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
     - unzip -q awscliv2.zip
     - ./aws/install
     - aws --version
-    - eval $(ssh-agent -s)
-    - echo "$EC2_PRIVATE_KEY" | tr -d '\r' > /tmp/ec2_key
-    - chmod 600 /tmp/ec2_key
-    - ssh-add /tmp/ec2_key
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-    - chmod 644 ~/.ssh/known_hosts
+    - echo "Obteniendo Instance ID de la EC2..."
+    - export EC2_INSTANCE_ID=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=backend-spring-boot" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].InstanceId' --output text --region $AWS_DEFAULT_REGION)
+    - echo "Instance ID: $EC2_INSTANCE_ID"
 
   script:
     - echo "Subiendo JAR a S3"
     - aws s3 cp target/*.jar "s3://$S3_BACKEND_BUCKET/app.jar" --region $AWS_DEFAULT_REGION
     - echo "JAR subido exitosamente a S3"
-    - echo "Conectando a EC2 para desplegar"
-    - ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key "$EC2_USER@$EC2_HOST" "aws s3 cp s3://$S3_BACKEND_BUCKET/app.jar /tmp/app.jar --region $AWS_DEFAULT_REGION && sudo mv /tmp/app.jar /opt/backend/app.jar && sudo systemctl daemon-reload && sudo systemctl restart springboot-app && echo 'Deploy completado exitosamente'"
-    - echo "Esperando inicio de aplicación..."
+    - echo "Enviando comando de deploy via AWS Systems Manager (SSM)..."
+    - |
+      COMMAND_ID=$(aws ssm send-command \
+        --instance-ids "$EC2_INSTANCE_ID" \
+        --document-name "AWS-RunShellScript" \
+        --comment "Deploy backend JAR" \
+        --parameters commands="[\"aws s3 cp s3://$S3_BACKEND_BUCKET/app.jar /tmp/app.jar --region $AWS_DEFAULT_REGION\",\"sudo mv /tmp/app.jar /opt/backend/app.jar\",\"sudo systemctl daemon-reload\",\"sudo systemctl restart springboot-app\",\"echo 'Deploy completado exitosamente'\"]" \
+        --region $AWS_DEFAULT_REGION \
+        --query 'Command.CommandId' \
+        --output text)
+      echo "Command ID: $COMMAND_ID"
+      echo "Esperando resultado del comando SSM..."
+      for i in $(seq 1 30); do
+        RESULT=$(aws ssm list-command-invocations --command-id "$COMMAND_ID" --details --query 'CommandInvocations[0].{Status:Status,Output:CommandPlugins[0].Output}' --output json --region $AWS_DEFAULT_REGION)
+        STATUS=$(echo "$RESULT" | jq -r '.Status')
+        echo "Estado SSM: $STATUS"
+        if [ "$STATUS" = "Success" ]; then
+          echo "Output:"
+          echo "$RESULT" | jq -r '.Output'
+          break
+        elif [ "$STATUS" = "Failed" ] || [ "$STATUS" = "Cancelled" ] || [ "$STATUS" = "TimedOut" ]; then
+          echo "Error en SSM: $STATUS"
+          echo "$RESULT" | jq -r '.Output'
+          exit 1
+        fi
+        sleep 5
+      done
+    - echo "Esperando inicio de aplicacion..."
     - sleep 15
     - echo "Ejecutando health check..."
     - |
       for i in 1 2 3 4 5; do
-        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$EC2_HOST:8080/actuator/health || echo "000")
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api-logs.grupo-santoro.com.mx/actuator/health || echo "000")
         if [ "$STATUS" = "200" ] || [ "$STATUS" = "404" ]; then
           echo "Health check pasado (HTTP $STATUS)"
           break
