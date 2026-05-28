@@ -42,19 +42,15 @@ build:
 
 deploy:
   stage: deploy
-  image: ubuntu:latest
+  image: amazonlinux:2
   only:
     - development
   dependencies:
     - build
 
   before_script:
-    - apt-get update -y
-    - apt-get install -y curl unzip openssh-client
-    - curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-    - unzip awscliv2.zip
-    - ./aws/install
-    - rm -rf awscliv2.zip aws
+    - echo "Instalando dependencias..."
+    - yum install -y openssh-clients curl
     - eval $(ssh-agent -s)
     - echo "$EC2_PRIVATE_KEY" | tr -d '\r' > /tmp/ec2_key
     - chmod 600 /tmp/ec2_key
@@ -70,6 +66,20 @@ deploy:
     - echo "JAR subido exitosamente a S3"
     - echo "Conectando a EC2 para desplegar"
     - ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key "$EC2_USER@$EC2_HOST" "aws s3 cp s3://$S3_BACKEND_BUCKET/app.jar /tmp/app.jar --region $AWS_DEFAULT_REGION && sudo mv /tmp/app.jar /opt/backend/app.jar && sudo systemctl daemon-reload && sudo systemctl restart springboot-app && echo 'Deploy completado exitosamente'"
+    - echo "Esperando inicio de aplicación..."
+    - sleep 15
+    - echo "Ejecutando health check..."
+    - |
+      for i in 1 2 3 4 5; do
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://$EC2_HOST:8080/actuator/health || echo "000")
+        if [ "$STATUS" = "200" ] || [ "$STATUS" = "404" ]; then
+          echo "Health check pasado (HTTP $STATUS)"
+          break
+        else
+          echo "Intento $i: HTTP $STATUS - reintentando en 10s..."
+          sleep 10
+        fi
+      done
 
   environment:
     name: production
