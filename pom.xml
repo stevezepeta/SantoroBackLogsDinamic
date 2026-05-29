@@ -46,6 +46,12 @@
 			<artifactId>spring-boot-starter-mail</artifactId>
 		</dependency>
 
+		<!-- Actuator - health checks y metricas -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-actuator</artifactId>
+		</dependency>
+
 		<!-- Si de verdad usas WebSocket, déjalo. Si no, quítalo. -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
