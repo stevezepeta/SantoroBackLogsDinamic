@@ -64,9 +64,9 @@ deploy:
     - echo "Subiendo JAR a S3"
     - aws s3 cp target/*.jar "s3://$S3_BACKEND_BUCKET/app.jar" --region $AWS_DEFAULT_REGION
     - echo "JAR subido exitosamente a S3"
-    - echo "Enviando comando de deploy via AWS Systems Manager SSM..."
+    - echo "Construyendo script de deploy como JSON para SSM..."
     - |
-      DEPLOY_CMD=$(cat <<'EOF'
+      DEPLOY_SCRIPT=$(cat <<'DEPLOY'
       set -e
       echo "=== Deploy iniciado ==="
       aws s3 cp s3://BUCKET/app.jar /tmp/app.jar --region REGION
@@ -92,10 +92,12 @@ deploy:
         fi
       done
       echo "=== Deploy completado exitosamente ==="
-      EOF
+      DEPLOY
       )
-      DEPLOY_CMD=$(echo "$DEPLOY_CMD" | sed "s|BUCKET|$S3_BACKEND_BUCKET|g; s|REGION|$AWS_DEFAULT_REGION|g")
-      COMMAND_ID=$(aws ssm send-command --instance-ids "$EC2_INSTANCE_ID" --document-name "AWS-RunShellScript" --comment "Deploy backend JAR limpio" --parameters commands="[$DEPLOY_CMD]" --region $AWS_DEFAULT_REGION --query 'Command.CommandId' --output text)
+      DEPLOY_SCRIPT=$(echo "$DEPLOY_SCRIPT" | sed "s|BUCKET|$S3_BACKEND_BUCKET|g; s|REGION|$AWS_DEFAULT_REGION|g")
+      echo "$DEPLOY_SCRIPT" | jq -R -s '{commands:[.]}' > /tmp/ssm-deploy.json
+      echo "Enviando comando de deploy via AWS Systems Manager SSM..."
+      COMMAND_ID=$(aws ssm send-command --instance-ids "$EC2_INSTANCE_ID" --document-name "AWS-RunShellScript" --comment "Deploy backend JAR limpio" --parameters file:///tmp/ssm-deploy.json --region $AWS_DEFAULT_REGION --query 'Command.CommandId' --output text)
       echo "Command ID $COMMAND_ID"
       echo "Esperando resultado del comando SSM..."
       for i in $(seq 1 60); do
