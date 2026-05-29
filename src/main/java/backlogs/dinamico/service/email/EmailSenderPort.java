@@ -8,6 +8,8 @@ public interface EmailSenderPort {
 
     void sendInviteOtp(String toEmail, String otp, int ttlHours, String orgName);
 
+    void sendPasswordResetCode(String toEmail, String userName, String code, int ttlMinutes);
+
     void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert);
 
     void sendAlertWithPdf(String toEmail, String toName,

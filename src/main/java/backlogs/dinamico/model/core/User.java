@@ -53,4 +53,22 @@ public class User extends BaseEntity {
     @Field("must_change_password")
     @Builder.Default
     private boolean mustChangePassword = false;
+
+    // ── Password Reset (sin tokens externos) ──────────────────────────────────
+
+    /**
+     * Hash del código de recuperación (6 dígitos).
+     * Se genera al solicitar reset, se valida al confirmar.
+     */
+    @Field("reset_code_hash")
+    @JsonIgnore
+    private String resetCodeHash;
+
+    /**
+     * Timestamp de expiración del código de reset (ej: 15 minutos).
+     * Si Instant.now() > resetCodeExpires, el código ya no es válido.
+     */
+    @Field("reset_code_expires")
+    @JsonIgnore
+    private Instant resetCodeExpires;
 }
