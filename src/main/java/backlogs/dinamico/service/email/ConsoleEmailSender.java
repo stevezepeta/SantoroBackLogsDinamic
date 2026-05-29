@@ -45,6 +45,20 @@ public class ConsoleEmailSender implements EmailSenderPort {
     }
 
     @Override
+    public void sendPasswordResetCode(String toEmail, String userName, String code, int ttlMinutes) {
+        log.info("""
+                ╔══════════════════════════════════════════╗
+                ║      PASSWORD RESET CODE                 ║
+                ║  To      : {}
+                ║  Name    : {}
+                ║  Code    : {}
+                ║  Usar en : POST /api/auth/reset-password ║
+                ║  Expires : {} minutos
+                ╚══════════════════════════════════════════╝
+                """, toEmail, userName, code, ttlMinutes);
+    }
+
+    @Override
     public void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert) {
 
     }

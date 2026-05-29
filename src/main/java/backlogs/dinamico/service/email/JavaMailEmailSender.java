@@ -66,6 +66,15 @@ public class JavaMailEmailSender implements EmailSenderPort {
     }
 
     @Override
+    public void sendPasswordResetCode(String toEmail, String userName, String code, int ttlMinutes) {
+        String displayName = (userName != null && !userName.isBlank()) ? userName : "Usuario";
+        String resetLink = frontendBaseUrl + "/#/reset-password";
+        sendEmail(toEmail,
+                "Recuperación de contraseña - DataLogs",
+                buildPasswordResetTemplate(displayName, code, ttlMinutes, resetLink));
+    }
+
+    @Override
     public void sendAlertNotification(String toEmail, String toName, AlertEmailDto alert) {
 
         String subject = buildAlertSubject(alert);
@@ -451,6 +460,138 @@ public class JavaMailEmailSender implements EmailSenderPort {
             </table>
             </body></html>
             """.formatted(title, subtitle, ctaBlock, otp, ttlLabel);
+    }
+
+    private String buildPasswordResetTemplate(String userName, String code, int ttlMinutes, String resetLink) {
+        return """
+            <!DOCTYPE html>
+            <html lang="es">
+            <head>
+            <meta charset="UTF-8">
+            <meta name="color-scheme" content="light dark">
+            <meta name="supported-color-schemes" content="light dark">
+            <style>
+              body { background:#f3f4f6; margin:0; padding:0; font-family:Arial,sans-serif; }
+              .email-wrap { background:#ffffff; border-color:#e5e7eb; }
+              .body-td { background:#ffffff; }
+              .title { color:#111827; }
+              .text-main { color:#6b7280; }
+              .code-box { background:#f9fafb; border-color:#e5e7eb; }
+              .code-label { color:#9ca3af; }
+              .code-number { color:#111827; }
+              .code-ttl { color:#6b7280; }
+              .warn-box { background:#fefce8; border-color:#fde68a; }
+              .warn-text { color:#92400e; }
+              .footer-td { background:#f9fafb; border-color:#e5e7eb; }
+              .footer-p { color:#9ca3af; }
+              .cta-btn { background:#111827; color:#ffffff; }
+
+              @media (prefers-color-scheme: dark) {
+                body { background:#0f172a !important; }
+                .email-wrap { background:#1e293b !important; border-color:#334155 !important; }
+                .body-td { background:#1e293b !important; }
+                .title { color:#f1f5f9 !important; }
+                .text-main { color:#94a3b8 !important; }
+                .code-box { background:#0f172a !important; border-color:#334155 !important; border-left-color:#dc2626 !important; }
+                .code-label { color:#64748b !important; }
+                .code-number { color:#e2e8f0 !important; }
+                .code-ttl { color:#64748b !important; }
+                .warn-box { background:rgba(120,53,15,0.3) !important; border-color:#92400e !important; }
+                .warn-text { color:#fbbf24 !important; }
+                .footer-td { background:#0f172a !important; border-color:#1e293b !important; }
+                .footer-p { color:#475569 !important; }
+                .cta-btn { background:#dc2626 !important; color:#ffffff !important; }
+              }
+            </style>
+            </head>
+            <body>
+            <table width="100%%" cellpadding="0" cellspacing="0">
+            <tr><td align="center" style="padding:40px 16px">
+            <table width="540" cellpadding="0" cellspacing="0" class="email-wrap"
+                   style="border-radius:8px;overflow:hidden;border:1px solid #e5e7eb">
+
+              <!-- HEADER -->
+              <tr>
+                <td style="background:#111827;padding:24px 32px">
+                  <div style="font-size:20px;font-weight:900;color:#ffffff;letter-spacing:2px">DataLogs</div>
+                  <div style="font-size:10px;color:#6b7280;letter-spacing:2px;margin-top:3px">
+                    SISTEMA DE GESTIÓN DE LOGS
+                  </div>
+                </td>
+              </tr>
+              <tr><td style="height:3px;background:linear-gradient(90deg,#334155,#64748b,#334155)"></td></tr>
+
+              <!-- BODY -->
+              <tr>
+                <td class="body-td" style="padding:36px 40px 28px">
+                  <h1 class="title" style="font-size:20px;margin:0 0 12px;line-height:1.4">
+                    🔐 Recuperación de contraseña
+                  </h1>
+                  <p class="text-main" style="font-size:14px;line-height:1.7;margin:0 0 6px">
+                    Hola, <strong>%s</strong>
+                  </p>
+                  <p class="text-main" style="font-size:14px;line-height:1.7;margin:0 0 28px">
+                    Recibimos una solicitud para restablecer la contraseña de tu cuenta en <strong>DataLogs</strong>.
+                    Utiliza el siguiente código de seguridad para continuar:
+                  </p>
+
+                  <!-- CODE BOX -->
+                  <div class="code-box"
+                       style="border:1px solid #e5e7eb;border-left:4px solid #dc2626;
+                              border-radius:4px;padding:24px;text-align:center;margin:0 0 24px">
+                    <div class="code-label"
+                         style="font-size:10px;letter-spacing:3px;
+                                text-transform:uppercase;margin-bottom:10px">
+                      Código de recuperación
+                    </div>
+                    <div class="code-number"
+                         style="font-size:44px;font-weight:900;letter-spacing:10px;
+                                font-family:monospace">%s</div>
+                    <div class="code-ttl" style="font-size:11px;margin-top:10px;color:#6b7280">
+                      Válido por <strong>%d minutos</strong>
+                    </div>
+                  </div>
+
+                  <!-- CTA -->
+                  <div style="text-align:center;margin:0 0 24px">
+                    <a href="%s" class="cta-btn"
+                       style="display:inline-block;text-decoration:none;
+                              font-size:14px;font-weight:700;padding:13px 38px;border-radius:6px">
+                      Restablecer contraseña &rarr;
+                    </a>
+                  </div>
+
+                  <!-- WARNING -->
+                  <div class="warn-box"
+                       style="background:#fefce8;border:1px solid #fde68a;
+                              border-radius:4px;padding:12px 16px">
+                    <p class="warn-text" style="margin:0;font-size:12px">
+                      ⚠️ Si no solicitaste este cambio, ignora este mensaje y tu contraseña permanecerá sin cambios.
+                      Nadie de nuestro equipo te pedirá este código por ningún medio.
+                    </p>
+                  </div>
+                </td>
+              </tr>
+
+              <!-- FOOTER -->
+              <tr>
+                <td class="footer-td"
+                    style="background:#f9fafb;padding:16px 40px;border-top:1px solid #e5e7eb">
+                  <p class="footer-p" style="margin:0;font-size:11px;color:#9ca3af">
+                    <strong style="color:#374151">DataLogs</strong> · Grupo Santoro ·
+                    <a href="mailto:soporte.tecnico@grupo-santoro.com.mx"
+                       style="color:#374151;text-decoration:none">
+                      soporte.tecnico@grupo-santoro.com.mx
+                    </a>
+                  </p>
+                </td>
+              </tr>
+
+            </table>
+            </td></tr>
+            </table>
+            </body></html>
+            """.formatted(userName, code, ttlMinutes, resetLink);
     }
 
 }
