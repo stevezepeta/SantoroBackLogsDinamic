@@ -156,12 +156,15 @@ public class SecurityConfig {
                 "Content-Type",
                 "X-API-Key",
                 "X-Api-Key",
-                "X-Tenant", "X-Tenant-Id",
+                "X-Tenant", "X-Tenant-Id", "X-Organization-Id",
                 "X-Org-Code", "X-Org-Slug", "X-Org-Domain",
                 "X-System-Id", "X-Environment-Id",
                 "X-Requested-With"
         ));
-        cfg.setExposedHeaders(List.of("X-Request-Id"));
+        cfg.setExposedHeaders(List.of(
+                "X-Request-Id",
+                "X-Tenant", "X-Tenant-Id", "X-Organization-Id"
+        ));
         cfg.setAllowCredentials(false);
         cfg.setMaxAge(3600L);
 

@@ -35,4 +35,3 @@ build/
 
 ### Firebase ###
 src/main/resources/firebase-service-account.json
-AGENTS.md
