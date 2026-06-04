@@ -268,14 +268,43 @@ public class LogDashboardService {
         Criteria base = buildBaseCriteria(auth, system, from, to)
                 .and("geo.coordinates").exists(true);
 
+        // ── REGLA DE NEGOCIO: FILTRAR LOGS SIN DISPOSITIVO VÁLIDO ───────────────
+        // Excluir logs cuyo caseId sea null, vacío, guion solo, o que no empiece con
+        // un prefijo de sistema válido (ej: TV-, TKT-, etc.)
+        base = base.and("caseId").exists(true)
+                .ne(null)
+                .ne("")
+                .ne("-")
+                .regex("^[A-Z]+[-_]");  // Debe empezar con mayúsculas + guion/underscore
+
+        // ── AGRUPACIÓN CORRECTA: POR caseId (DISPOSITIVO FÍSICO ÚNICO) ──────────
+        // Cada dispositivo tiene un caseId único. La última posición GPS corresponde
+        // al último log de ese dispositivo. Esto evita duplicados por nombre de usuario.
         Aggregation agg = Aggregation.newAggregation(
                 Aggregation.match(base),
+                
+                // Ordenar por tiempo DESC para tomar el más reciente de cada dispositivo
+                Aggregation.sort(org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Direction.DESC, "eventTime")),
+                
+                // Proyectar campos necesarios
                 Aggregation.project()
-                        .and("geo.coordinates").as("coords"),
-                Aggregation.group("coords").count().as("count"),
-                Aggregation.sort(
-                        org.springframework.data.domain.Sort.by(
-                                org.springframework.data.domain.Sort.Direction.DESC, "count")),
+                        .and("caseId").as("caseId")
+                        .and("geo.coordinates").as("coords")
+                        .and("actor.fullName").as("usuario")
+                        .and("eventTime").as("ultimaConexion")
+                        .and("meta.ip").as("ip"),
+                
+                // AGRUPAR POR caseId (cada dispositivo = un punto único en el mapa)
+                Aggregation.group("caseId")
+                        .first("usuario").as("usuario")
+                        .first("coords").as("coordenadas")
+                        .max("ultimaConexion").as("ultimaConexion")
+                        .first("ip").as("ip"),
+                
+                Aggregation.sort(org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Direction.DESC, "ultimaConexion")),
+                
                 Aggregation.limit(2000)  // límite para no saturar el mapa
         );
 
@@ -285,16 +314,24 @@ public class LogDashboardService {
 
         List<DashboardGeoDto.GeoPoint> points = raw.stream().map(doc -> {
             @SuppressWarnings("unchecked")
-            List<Double> coords = (List<Double>) doc.get("_id");
+            List<Double> coords = (List<Double>) doc.get("coordenadas");
             if (coords == null || coords.size() < 2) return null;
+            
+            String caseId = doc.getString("_id");
+            String usuario = doc.getString("usuario");
+            String ip = doc.getString("ip");
+            
             return DashboardGeoDto.GeoPoint.builder()
                     .lon(coords.get(0))
                     .lat(coords.get(1))
-                    .count(((Number) doc.getOrDefault("count", 0)).longValue())
+                    .count(1)  // Cada dispositivo cuenta como 1 punto
+                    .caseId(caseId)
+                    .usuario(usuario)
+                    .ip(ip)
                     .build();
         }).filter(Objects::nonNull).toList();
 
-        long total = points.stream().mapToLong(DashboardGeoDto.GeoPoint::getCount).sum();
+        long total = points.size();  // Total = número de dispositivos únicos
 
         return DashboardGeoDto.builder()
                 .total(total)
