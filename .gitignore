@@ -51,6 +51,7 @@ target/classes/firebase-service-account.json
 .env.*.local
 config-produccion.env
 !.env*.example
+*.ps1
 
 ### Datos de Usuarios y Archivos Subidos ###
 data/
