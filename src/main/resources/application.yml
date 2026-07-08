@@ -17,7 +17,7 @@ spring:
 
 multitenant:
   strategy: single
-  base-database: logs_system
+  base-database: ${MULTITENANT_BASE_DATABASE:logs_system}  # Base de datos principal de auditoría global
   log-collection: log_events
   ensure-indexes: true
   require-api-key: true
@@ -92,5 +92,5 @@ springdoc:
 
 server:
   address: 0.0.0.0
-  port: 8080
+  port: ${SERVER_PORT:8040}  # Puerto principal del backend de logs (NO Quintana Roo)
 

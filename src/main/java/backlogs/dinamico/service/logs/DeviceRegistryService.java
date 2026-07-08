@@ -24,19 +24,29 @@ public class DeviceRegistryService {
 
     private static final long OFFLINE_THRESHOLD_MINUTES = 10;
 
-    /**
-     * Registra o actualiza un dispositivo cuando llega un log.
-     *
-     * Clave de deduplicación: hostname (identifica la máquina física).
-     * Si el mismo servidor reporta con IP privada y con IP pública, ambas se
-     * almacenan en {@code ipInterfaces} y se consolida en UN solo documento.
-     */
     public void upsertFromLog(ObjectId tenantId, String deviceId, String system,
                               String type, String ip, String hostname,
                               Double latitude, Double longitude,
                               String locationName, String eventType) {
 
-        if (tenantId == null || deviceId == null || deviceId.isBlank()) return;
+        // ══════════════════════════════════════════════════════════════════════════════
+        // FILTRO DE INTEGRIDAD ESTRICTO: Validar deviceId antes de registrar
+        // ══════════════════════════════════════════════════════════════════════════════
+        if (tenantId == null) return;
+        if (deviceId == null || deviceId.isBlank()) return;
+        
+        // Rechazar deviceId que sea solo un guion "-"
+        if ("-".equals(deviceId.trim())) {
+            log.debug("[DeviceRegistry] Rechazado deviceId inválido: '-'");
+            return;
+        }
+        
+        // Rechazar deviceId con longitud menor a 5 caracteres (no es un hash/UUID válido)
+        if (deviceId.trim().length() < 5) {
+            log.debug("[DeviceRegistry] Rechazado deviceId demasiado corto: '{}' (len={})", 
+                     deviceId, deviceId.trim().length());
+            return;
+        }
 
         Query query = new Query(new Criteria().andOperator(
                 Criteria.where("tenantId").is(tenantId),
@@ -58,9 +68,6 @@ public class DeviceRegistryService {
         if (locationName != null && !locationName.isBlank()) update.set("locationName", locationName);
 
         // ── Consolidación de IPs ─────────────────────────────────────────────
-        // `ip` guarda la última IP reportada (backward compat con frontend).
-        // `ipInterfaces.<tipo>` acumula TODAS las IPs sin sobreescribir las anteriores:
-        //   {"privada": "192.168.100.8", "publica": "187.188.66.56"}
         if (ip != null && !ip.isBlank()) {
             update.set("ip", ip);
             String ifaceKey = classifyIp(ip);                       // "privada" | "publica" | "loopback"
@@ -84,14 +91,6 @@ public class DeviceRegistryService {
         }
     }
 
-    /**
-     * Clasifica una IP según su rango:
-     * <ul>
-     *   <li><b>privada</b>: 10.x, 172.16-31.x, 192.168.x, 127.x, 169.254.x</li>
-     *   <li><b>loopback</b>: ::1</li>
-     *   <li><b>publica</b>: cualquier otra</li>
-     * </ul>
-     */
     private static String classifyIp(String ip) {
         if (ip == null || ip.isBlank()) return "desconocida";
         String t = ip.trim();
@@ -115,6 +114,16 @@ public class DeviceRegistryService {
 
         if (system != null && !system.isBlank())
             cs.add(Criteria.where("system").is(system.trim().toUpperCase(java.util.Locale.ROOT)));
+
+        // ══════════════════════════════════════════════════════════════════════════════
+        // FILTRO DE INTEGRIDAD: Excluir dispositivos con deviceId inválido/corrupto
+        // para evitar marcadores fantasma en el mapa (caseId vacío, nulo o con "-")
+        // ══════════════════════════════════════════════════════════════════════════════
+        cs.add(Criteria.where("deviceId").exists(true).ne(null));
+        cs.add(Criteria.where("deviceId").ne(""));
+        cs.add(Criteria.where("deviceId").ne("-"));
+        // Filtrar por longitud mínima (regex: al menos 5 caracteres alfanuméricos)
+        cs.add(Criteria.where("deviceId").regex("^.{5,}$"));
 
         Query query = new Query(new Criteria().andOperator(cs.toArray(new Criteria[0])));
         List<Device> devices = mongoTemplate.find(query, Device.class);

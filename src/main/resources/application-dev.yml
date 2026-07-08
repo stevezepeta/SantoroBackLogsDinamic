@@ -1,8 +1,8 @@
-# application-dev.yml
+# application-dev.yml - Ambiente de Desarrollo Principal
 multitenant:
   require-api-key: true
   strategy: collection-per-tenant
-  base-database: logs_system
+  base-database: ${MULTITENANT_BASE_DATABASE:logs_system}  # Base de datos principal
   log-collection: log_events
   ensure-indexes: true
   dev:

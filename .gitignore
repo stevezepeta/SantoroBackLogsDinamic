@@ -1,8 +1,14 @@
+### Build and Maven ###
 HELP.md
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+*.class
+*.jar
+*.war
+*.ear
+*.log
 
 ### STS ###
 .apt_generated
@@ -18,6 +24,7 @@ target/
 *.iws
 *.iml
 *.ipr
+out/
 
 ### NetBeans ###
 /nbproject/private/
@@ -32,6 +39,68 @@ build/
 ### VS Code ###
 .vscode/
 
-
-### Firebase ###
+### Firebase y Credenciales ###
 src/main/resources/firebase-service-account.json
+target/classes/firebase-service-account.json
+**/firebase-service-account.json
+
+### Archivos de Configuración Sensibles ###
+*.env
+.env
+.env.local
+.env.*.local
+config-produccion.env
+!.env*.example
+
+### Datos de Usuarios y Archivos Subidos ###
+data/
+uploads/
+temp/
+tmp/
+
+### Logs ###
+*.log
+logs/
+log/
+*.log.*
+
+### Sistema Operativo ###
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+.directory
+
+### Archivos Temporales ###
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.backup
+*~
+
+### Dependencias Node (si aplica) ###
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+### Otros ###
+*.pid
+*.seed
+*.pid.lock
+.cache/
