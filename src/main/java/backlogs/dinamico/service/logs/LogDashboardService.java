@@ -268,14 +268,21 @@ public class LogDashboardService {
         Criteria base = buildBaseCriteria(auth, system, from, to)
                 .and("geo.coordinates").exists(true);
 
-        // ── REGLA DE NEGOCIO: FILTRAR LOGS SIN DISPOSITIVO VÁLIDO ───────────────
-        // Excluir logs cuyo caseId sea null, vacío, guion solo, o que no empiece con
-        // un prefijo de sistema válido (ej: TV-, TKT-, etc.)
+        // ══════════════════════════════════════════════════════════════════════════════
+        // FILTRO DE INTEGRIDAD ESTRICTO REFORZADO:
+        // Excluir logs cuyo caseId sea null, vacío, "-", o que no cumpla con:
+        //   • Longitud mínima de 5 caracteres (evita tokens corruptos como "1", "ab", etc.)
+        //   • Debe empezar con prefijo de sistema válido (letras mayúsculas + guion/underscore)
+        // 
+        // Ejemplos VÁLIDOS:   TV-12345, TKT-001, ACC_999, HID-001
+        // Ejemplos INVÁLIDOS: null, "", "-", "123", "ab", "-001", "tv-001" (minúsculas)
+        // ══════════════════════════════════════════════════════════════════════════════
         base = base.and("caseId").exists(true)
                 .ne(null)
                 .ne("")
                 .ne("-")
-                .regex("^[A-Z]+[-_]");  // Debe empezar con mayúsculas + guion/underscore
+                .regex("^[A-Z]+[-_][A-Za-z0-9]")  // Prefijo válido
+                .regex("^.{5,}$");  // Longitud mínima de 5 caracteres
 
         // ── AGRUPACIÓN CORRECTA: POR caseId (DISPOSITIVO FÍSICO ÚNICO) ──────────
         // Cada dispositivo tiene un caseId único. La última posición GPS corresponde
@@ -340,7 +347,6 @@ public class LogDashboardService {
     }
 
     // ── Helpers internos ──────────────────────────────────────────────────────
-
     private Criteria buildBaseCriteria(Authentication auth, String system,
                                        Instant from, Instant to) {
         ObjectId tenantId = TenantContext.getTenantId();

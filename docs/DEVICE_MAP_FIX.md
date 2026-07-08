@@ -1,5 +1,9 @@
 # Corrección del Mapa de Dispositivos - Dashboard
 
+> **⚠️ ACTUALIZACIÓN 2026-07-08**  
+> Este fix ha sido **reforzado** con validaciones adicionales de longitud mínima.  
+> Ver documento actualizado: [DEVICE_MAP_INTEGRITY_FIX.md](./DEVICE_MAP_INTEGRITY_FIX.md)
+
 ## Problema Identificado
 
 En el mapa del Dashboard, bajo la pestaña de "DISPOSITIVOS", se generaban marcadores duplicados para un mismo usuario:
