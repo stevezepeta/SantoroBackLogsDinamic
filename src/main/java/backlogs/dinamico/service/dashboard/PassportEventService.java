@@ -63,7 +63,7 @@ public class PassportEventService {
         if (tenantId == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "tenant_not_resolved");
 
         List<Criteria> c = new ArrayList<>();
-        c.add(Criteria.where("tenantId").is(tenantId));
+        c.add(Criteria.where("tenant_id").is(tenantId));
         c.add(Criteria.where("system").is(system));
 
         if (from != null) c.add(Criteria.where("eventTime").gte(from));

@@ -51,6 +51,11 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         if (HttpMethod.OPTIONS.matches(request.getMethod())) return true;
+
+        // Omitir validacion JWT para la conexion WebSocket
+        String path = request.getServletPath();
+        if (path.startsWith("/ws")) return true;
+
         return LOG_EVENTS_POST.matches(request)
                 || LOGS_POST.matches(request)
                 || INGEST_POST.matches(request)

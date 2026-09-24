@@ -7,28 +7,46 @@ import org.bson.Document;
 import org.bson.types.ObjectId;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
-import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Field;
 
 
 import java.time.Instant;
 
 
-@Data @NoArgsConstructor @AllArgsConstructor @Builder
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
 @org.springframework.data.mongodb.core.mapping.Document(collection = "alert_incidents")
 @CompoundIndexes({
-@CompoundIndex(name = "ix_incident_tenant_rule_status", def = "{ 'tenant_id': 1, 'rule_id': 1, 'status': 1 }"),
-@CompoundIndex(name = "ix_incident_opened_at", def = "{ 'opened_at': 1 }")
+    @CompoundIndex(name = "ix_incident_tenant_rule_status", def = "{ 'tenant_id': 1, 'rule_id': 1, 'status': 1 }"),
+    @CompoundIndex(name = "ix_incident_opened_at", def = "{ 'opened_at': 1 }"),
+    @CompoundIndex(name = "ix_incident_resolved_at", def = "{ 'resolved_at': 1 }")
 })
 public class AlertIncident extends BaseEntity {
-@Field("tenant_id")
-private ObjectId tenantId;
-@Field("rule_id")
-private ObjectId ruleId;
-@Field("opened_at")
-private Instant openedAt;
-@Field("closed_at")
-private Instant closedAt;
-private String status; 
-private Document context;
+    @Field("tenant_id")
+    private ObjectId tenantId;
+    @Field("rule_id")
+    private ObjectId ruleId;
+    @Field("opened_at")
+    private Instant openedAt;
+    @Field("closed_at")
+    private Instant closedAt;
+    @Builder.Default
+    private String status = "OPEN";
+
+    // Campos para resolución de incidentes
+    @Field("root_cause")
+    private String rootCause;
+
+    @Field("solution_comment")
+    private String solutionComment;
+
+    @Field("resolved_by")
+    private String resolvedBy;
+
+    @Field("resolved_at")
+    private Instant resolvedAt;
+
+    private Document context;
 }

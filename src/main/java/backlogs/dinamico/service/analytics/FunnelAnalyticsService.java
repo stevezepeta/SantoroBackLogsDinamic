@@ -6,6 +6,7 @@ import backlogs.dinamico.api.dto.analytics.FunnelSummaryDto;
 import backlogs.dinamico.model.analytics.FunnelTemplate;
 import backlogs.dinamico.model.analytics.FunnelTemplate.FunnelStepDefinition;
 import backlogs.dinamico.repository.analytics.FunnelTemplateRepository;
+import backlogs.dinamico.infra.cache.TimedCache;
 import backlogs.dinamico.infra.security.AuthUser;
 import backlogs.dinamico.security.auth.ScopeGuard;
 import backlogs.dinamico.tenant.TenantContext;
@@ -15,6 +16,7 @@ import org.bson.Document;
 import org.bson.types.ObjectId;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationOptions;
 import org.springframework.data.mongodb.core.aggregation.AggregationOperation;
 import org.springframework.data.mongodb.core.aggregation.AggregationOperationContext;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -45,10 +47,15 @@ import java.util.stream.Collectors;
 public class FunnelAnalyticsService {
 
     private static final String COLLECTION = "log_events";
+    private static final String HINT_INDEX = "idx_tenant_system_eventType_time_v2";
+    private static final int CURSOR_BATCH_SIZE = 1000;
 
     private final MongoTemplate mongoTemplate;
     private final FunnelTemplateRepository funnelTemplateRepository;
     private final ScopeGuard scopeGuard;
+
+    private final TimedCache<FunnelResponseDto> funnelCache =
+            new TimedCache<>("funnel-analysis", java.time.Duration.ofSeconds(30));
 
     /**
      * Calcula el embudo de conversión para un sistema específico.
@@ -75,7 +82,7 @@ public class FunnelAnalyticsService {
         }
 
         String normalizedSystem = systemName.trim().toUpperCase(Locale.ROOT);
-        
+
         // ── 2. Buscar configuración del funnel en MongoDB ────────────────────
         FunnelTemplate template = funnelTemplateRepository
                 .findBySystemNameAndActive(normalizedSystem, true)
@@ -101,6 +108,19 @@ public class FunnelAnalyticsService {
         AuthUser user = extractAuthUser(auth);
         scopeGuard.requireSystemAccess(user, normalizedSystem);
 
+        String cacheKey = buildFunnelKey(tenantId, template, from, to);
+        return funnelCache.get(cacheKey, () -> buildFunnelResponse(
+                tenantId, normalizedSystem, template, from, to
+        ));
+    }
+
+    private FunnelResponseDto buildFunnelResponse(
+            ObjectId tenantId,
+            String normalizedSystem,
+            FunnelTemplate template,
+            Instant from,
+            Instant to
+    ) {
         // ── 4. Construir criterios de consulta ───────────────────────────────
         Criteria criteria = buildBaseCriteria(tenantId, normalizedSystem, from, to);
 
@@ -114,7 +134,7 @@ public class FunnelAnalyticsService {
         FunnelSummaryDto summary = buildSummary(steps);
 
         log.info("[Funnel] system={}, totalStarted={}, totalCompleted={}, globalConversion={}%",
-                normalizedSystem, summary.getTotalStarted(), summary.getTotalCompleted(), 
+                normalizedSystem, summary.getTotalStarted(), summary.getTotalCompleted(),
                 summary.getGlobalConversionRate());
 
         return FunnelResponseDto.builder()
@@ -125,9 +145,22 @@ public class FunnelAnalyticsService {
                 .build();
     }
 
+    private String buildFunnelKey(ObjectId tenantId, FunnelTemplate template, Instant from, Instant to) {
+        String templateId = template.getId() != null ? template.getId().toHexString() : template.getSystemName();
+        return tenantId + "|" + templateId + "|" + from + "|" + to;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // MÉTODOS PRIVADOS
     // ─────────────────────────────────────────────────────────────────────────
+
+    private AggregationOptions buildAggregationOptions(String hint) {
+        return AggregationOptions.builder()
+                .cursorBatchSize(CURSOR_BATCH_SIZE)
+                .allowDiskUse(true)
+                .hint(hint)
+                .build();
+    }
 
     /**
      * Extrae el usuario autenticado.
@@ -182,17 +215,20 @@ public class FunnelAnalyticsService {
 
         // Agregación MongoDB para contar caseId únicos por eventType
         Aggregation aggregation = Aggregation.newAggregation(
-                // Match: filtrar por criterios base y eventTypes del funnel
+                // 1. Match estricto por tenant, sistema, rango de tiempo y eventTypes del funnel
                 Aggregation.match(
                         baseCriteria.and("eventType").in(eventTypes)
                                 .and("caseId").exists(true).ne(null).ne("")
                 ),
-                
-                // Group: agrupar por eventType y contar caseId distintos
+
+                // 2. Project: conservar solo eventType y caseId, descartar payload/meta
+                Aggregation.project("eventType", "caseId").andExclude("_id"),
+
+                // 3. Group: agrupar por eventType y contar caseId distintos
                 Aggregation.group("eventType")
                         .addToSet("caseId").as("uniqueCases"),
-                
-                // Project: calcular el tamaño del array de casos únicos
+
+                // 4. Project: calcular el tamaño del array de casos únicos
                 new AggregationOperation() {
                     @Override
                     public Document toDocument(AggregationOperationContext ctx) {
@@ -202,7 +238,7 @@ public class FunnelAnalyticsService {
                         );
                     }
                 }
-        );
+        ).withOptions(buildAggregationOptions(HINT_INDEX));
 
         List<Document> results = mongoTemplate
                 .aggregate(aggregation, COLLECTION, Document.class)

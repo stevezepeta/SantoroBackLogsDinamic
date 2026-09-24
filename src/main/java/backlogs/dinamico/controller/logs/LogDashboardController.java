@@ -24,17 +24,25 @@ public class LogDashboardController {
     private final LogDashboardService dashboardService;
 
     @Operation(summary = "Stats del dashboard",
-            description = "Totales y distribuciones — alimenta todas las cards y gráficas de barras.")
+            description = "Totales y distribuciones — alimenta todas las cards y gráficas de barras. " +
+                    "Con range=all se calcula sobre el historial completo.")
     @GetMapping("/stats")
     @PreAuthorize("hasAuthority('PERM_LOG_READ')")
     public ApiResponse<DashboardStatsDto> stats(
             Authentication auth,
             @RequestParam(required = false) String system,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant toDate,
+            @RequestParam(required = false) String range
     ) {
+        Instant effectiveFrom = from != null ? from : fromDate;
+        Instant effectiveTo   = to   != null ? to   : toDate;
+        boolean allRange = "ALL".equalsIgnoreCase(range)
+                || (effectiveFrom == null && effectiveTo == null);
         return ApiResponse.ok("Dashboard stats", "dashboard_stats",
-                dashboardService.stats(auth, system, from, to));
+                dashboardService.stats(auth, system, effectiveFrom, effectiveTo, allRange));
     }
 
     @Operation(summary = "Series de tiempo para gráficas de líneas")
@@ -44,10 +52,14 @@ public class LogDashboardController {
             Authentication auth,
             @RequestParam(required = false) String system,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant fromDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant toDate
     ) {
+        Instant effectiveFrom = from != null ? from : fromDate;
+        Instant effectiveTo   = to   != null ? to   : toDate;
         return ApiResponse.ok("Dashboard series", "dashboard_series",
-                dashboardService.series(auth, system, from, to));
+                dashboardService.series(auth, system, effectiveFrom, effectiveTo));
     }
 
     @Operation(summary = "Métricas HTTP para gráfica radar")

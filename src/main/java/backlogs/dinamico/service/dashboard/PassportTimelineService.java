@@ -71,7 +71,7 @@ public class PassportTimelineService {
 
         // Si no te mandan caseId, intentamos resolverlo con passportNumber/personId/requestId
         List<Criteria> base = new ArrayList<>();
-        base.add(Criteria.where("tenantId").is(TenantContext.getTenantId()));
+        base.add(Criteria.where("tenant_id").is(TenantContext.getTenantId()));
         base.add(Criteria.where("system").is(system));
 
         if (from != null) base.add(Criteria.where("eventTime").gte(from));

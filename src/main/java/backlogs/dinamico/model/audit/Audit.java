@@ -21,13 +21,13 @@ import java.time.Instant;
 @CompoundIndex(name = "ix_audit_actor_at", def = "{ 'actor_id': 1, 'at': 1 }")
 })
 public class Audit extends BaseEntity {
-@Field("tenant_id")
-private ObjectId tenantId;
-@Field("actor_id")
-private ObjectId actorId; 
-private String action; 
-private Document target; 
-private Document metadata;
-@Indexed
-private Instant at;
+    @Field("tenant_id")
+    private ObjectId tenantId;
+    @Field("actor_id")
+    private ObjectId actorId;
+    private String action;
+    private Document target;
+    private Document metadata;
+    @Indexed
+    private Instant at;
 }

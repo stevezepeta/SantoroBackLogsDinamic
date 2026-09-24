@@ -1,36 +1,28 @@
 package backlogs.dinamico.service.ai;
 
+import backlogs.dinamico.model.catalog.SystemApp;
+import backlogs.dinamico.repository.catalog.SystemAppRepository;
 import backlogs.dinamico.service.ai.dto.SystemCatalogItemDto;
 import lombok.RequiredArgsConstructor;
-import org.bson.Document;
 import org.bson.types.ObjectId;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.domain.Sort;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.aggregation.Aggregation;
-import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class AiCatalogService {
 
-    private final MongoTemplate mongoTemplate;
-
-    @Value("${multitenant.log-collection:log_events}")
-    private String logCollection;
-
-    private static final String F_TENANT = "tenant_id";
-    private static final String F_SYS = "system";
+    private final SystemAppRepository systemAppRepository;
 
     /**
-     * Lista los sistemas visibles para el usuario actual.
+     * Lista los sistemas visibles para el usuario actual directamente desde la
+     * colección de catálogo, sin escanear {@code log_events}.
      *
      * @param allowedSystems null o vacío = sin restricción (ORG_ADMIN/ORG_OWNER);
      *                       con elementos = filtrar sistema IN allowedSystems (VIEWER, etc.)
@@ -40,62 +32,27 @@ public class AiCatalogService {
         if (tenantId == null) return List.of();
 
         int safeLimit = Math.min(Math.max(limit, 1), 200);
+        String query = StringUtils.hasText(q) ? q.trim().toLowerCase(Locale.ROOT) : null;
 
-        Criteria c = Criteria.where(F_TENANT).is(tenantId)
-                .and(F_SYS).exists(true)
-                .ne(null)
-                .ne("");
-
-        // Aplicar restricción de sistemas si el usuario no es admin/orgWide irrestricto
-        if (allowedSystems != null && !allowedSystems.isEmpty()) {
+        Page<SystemApp> page;
+        if (allowedSystems == null || allowedSystems.isEmpty()) {
+            page = systemAppRepository.findByTenantId(tenantId, Pageable.unpaged());
+        } else {
             List<String> normalizedCodes = allowedSystems.stream()
                     .filter(s -> s != null && !s.isBlank())
                     .map(s -> s.trim().toUpperCase(Locale.ROOT))
                     .distinct()
-                    .toList();
+                    .collect(Collectors.toList());
             if (normalizedCodes.isEmpty()) return List.of();
-            c = c.and(F_SYS).in(normalizedCodes);
+            page = systemAppRepository.findByTenantIdAndCodeIn(tenantId, normalizedCodes, Pageable.unpaged());
         }
 
-        Aggregation agg = Aggregation.newAggregation(
-                Aggregation.match(c),
-                Aggregation.group(F_SYS).count().as("count"),
-                Aggregation.project()
-                        .and("_id").as("name")
-                        .and("count").as("count")
-                        .andExclude("_id"),
-                Aggregation.sort(Sort.by(Sort.Direction.DESC, "count").and(Sort.by(Sort.Direction.ASC, "name"))),
-                Aggregation.limit(safeLimit)
-        );
-
-        List<Document> rows = mongoTemplate.aggregate(agg, logCollection, Document.class).getMappedResults();
-
-        List<SystemCatalogItemDto> out = new ArrayList<>();
-        String query = StringUtils.hasText(q) ? q.trim().toLowerCase(Locale.ROOT) : null;
-
-        for (Document row : rows) {
-            String name = Objects.toString(row.get("name"), "").trim();
-            long count = toLong(row.get("count"));
-
-            if (!StringUtils.hasText(name)) continue;
-
-            if (query != null && !name.toLowerCase(Locale.ROOT).contains(query)) {
-                continue;
-            }
-
-            out.add(new SystemCatalogItemDto(name, count));
-        }
-
-        return out;
-    }
-
-    private static long toLong(Object v) {
-        if (v == null) return 0L;
-        if (v instanceof Number n) return n.longValue();
-        try {
-            return Long.parseLong(String.valueOf(v));
-        } catch (Exception e) {
-            return 0L;
-        }
+        return page.getContent().stream()
+                .filter(app -> StringUtils.hasText(app.getCode()))
+                .filter(app -> query == null || app.getCode().toLowerCase(Locale.ROOT).contains(query)
+                        || (app.getName() != null && app.getName().toLowerCase(Locale.ROOT).contains(query)))
+                .limit(safeLimit)
+                .map(app -> new SystemCatalogItemDto(app.getCode(), 0L))
+                .collect(Collectors.toList());
     }
 }
