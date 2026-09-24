@@ -73,8 +73,10 @@ tmp/
 
 ### Logs ###
 *.log
-logs/
-log/
+# Solo directorios de logs en la raiz (sin '/' inicial, "log/" ignoraria
+# tambien carpetas de codigo fuente como repository/log/)
+/logs/
+/log/
 *.log.*
 
 ### Sistema Operativo ###
