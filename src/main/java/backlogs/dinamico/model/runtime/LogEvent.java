@@ -14,6 +14,7 @@ import org.springframework.data.mongodb.core.mapping.Field;
 import java.time.Instant;
 
 
+@Deprecated(since = "2026-07-13", forRemoval = true)
 @Data @NoArgsConstructor @AllArgsConstructor @Builder
 @org.springframework.data.mongodb.core.mapping.Document(collection = "log_events")
 @CompoundIndexes({

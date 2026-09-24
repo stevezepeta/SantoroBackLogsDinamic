@@ -10,6 +10,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.bson.Document;
 import org.bson.types.ObjectId;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.*;
 import org.springframework.data.mongodb.core.query.Criteria;
@@ -20,9 +21,10 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
-import java.util.Date;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.*;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -41,15 +43,51 @@ public class LogDashboardService {
     public DashboardStatsDto stats(Authentication auth,
                                    String system,
                                    Instant from,
-                                   Instant to) {
+                                   Instant to,
+                                   boolean allRange) {
 
-        Criteria base = buildBaseCriteria(auth, system, from, to);
+        // Métrica operativa: día en curso completo (00:00 UTC) si no llegan fechas.
+        // Modo ALL: sin filtro de fecha (historial completo).
+        InstantRange range = allRange ? null : resolveOperationalRange(from, to);
+        Criteria base = buildBaseCriteria(auth, system,
+                range != null ? range.from() : null,
+                range != null ? range.to() : null);
 
         long total = countWithCriteria(base);
-        if (total == 0) return emptyStats();
+        long totalHistoricalLogs = countHistoricalLogs(auth, system);
+        String overallHealth = StringUtils.hasText(system)
+                ? computeOverallHealth(auth, system)
+                : "UNKNOWN";
+
+        if (total == 0) {
+            DashboardStatsDto empty = emptyStats();
+            empty.setTotalHistoricalLogs(totalHistoricalLogs);
+            empty.setOverallHealth(overallHealth);
+            empty.setTotalEvents(0);
+            empty.setErrorCount(0);
+            empty.setSuccessCount(0);
+            empty.setErrorRate(0.0);
+            empty.setHealthStatus("INACTIVE");
+            empty.setActiveCases(0);
+            return empty;
+        }
+
+        long errorCount = countErrors(base);
+        long successCount = countSuccesses(base);
+        long activeCases = countActiveCases(base);
+        double errorRate = Math.round((errorCount * 10000.0 / total)) / 100.0;
+        String healthStatus = determineRangeHealthStatus(total, errorRate);
 
         return DashboardStatsDto.builder()
                 .total(total)
+                .totalEvents(total)
+                .errorCount(errorCount)
+                .successCount(successCount)
+                .errorRate(errorRate)
+                .healthStatus(healthStatus)
+                .activeCases(activeCases)
+                .totalHistoricalLogs(totalHistoricalLogs)
+                .overallHealth(overallHealth)
                 .topEventTypes(aggregate(base, "eventType",  TOP_N, total))
                 .outcomes(      aggregate(base, "outcome",   TOP_N, total))
                 .severities(    aggregate(base, "severity",  TOP_N, total))
@@ -68,6 +106,7 @@ public class LogDashboardService {
                                      Instant from,
                                      Instant to) {
 
+        // Métrica analítica: historial completo si no se especifica rango.
         Criteria base = buildBaseCriteria(auth, system, from, to);
 
         return DashboardSeriesDto.builder()
@@ -84,179 +123,217 @@ public class LogDashboardService {
                                  String system,
                                  Instant from,
                                  Instant to) {
+        try {
+            // Métrica analítica: historial completo si no se especifica rango.
+            Criteria base = buildBaseCriteria(auth, system, from, to)
+                    .and("http").exists(true);
 
-        Criteria base = buildBaseCriteria(auth, system, from, to)
-                .and("http").exists(true);
+            // Agrupar por statusCode + method → calcular latencia
+            Aggregation agg = Aggregation.newAggregation(
+                    Aggregation.match(base),
+                    Aggregation.project()
+                            .and("http.statusCode").as("sc")
+                            .and("http.method").as("method")
+                            .and("http.latencyMs").as("lat"),
+                    Aggregation.group("sc", "method")
+                            .count().as("count")
+                            .push("lat").as("latencies"),
+                    Aggregation.sort(
+                            org.springframework.data.domain.Sort.by(
+                                    org.springframework.data.domain.Sort.Direction.DESC, "count")),
+                    Aggregation.limit(100)
+            );
 
-        // Agrupar por statusCode + method → calcular latencia
-        Aggregation agg = Aggregation.newAggregation(
-                Aggregation.match(base),
-                Aggregation.project()
-                        .and("http.statusCode").as("sc")
-                        .and("http.method").as("method")
-                        .and("http.latencyMs").as("lat"),
-                Aggregation.group("sc", "method")
-                        .count().as("count")
-                        .push("lat").as("latencies"),
-                Aggregation.sort(
-                        org.springframework.data.domain.Sort.by(
-                                org.springframework.data.domain.Sort.Direction.DESC, "count"))
-        );
+            List<Document> raw = mongoTemplate
+                    .aggregate(agg, COLLECTION, Document.class)
+                    .getMappedResults();
 
-        List<Document> raw = mongoTemplate
-                .aggregate(agg, COLLECTION, Document.class)
-                .getMappedResults();
+            List<DashboardHttpDto.HttpBucket> buckets = raw.stream().map(doc -> {
+                Document id = doc.get("_id", Document.class);
+                String sc = id != null ? String.valueOf(id.getOrDefault("sc", "N/A")) : "N/A";
+                String method = id != null ? String.valueOf(id.getOrDefault("method", "N/A")) : "N/A";
+                long count = ((Number) doc.getOrDefault("count", 0)).longValue();
 
-        List<DashboardHttpDto.HttpBucket> buckets = raw.stream().map(doc -> {
-            Document id = doc.get("_id", Document.class);
-            String sc     = id != null ? String.valueOf(id.getOrDefault("sc", "N/A")) : "N/A";
-            String method = id != null ? String.valueOf(id.getOrDefault("method", "N/A")) : "N/A";
-            long count    = ((Number) doc.getOrDefault("count", 0)).longValue();
+                @SuppressWarnings("unchecked")
+                List<Object> lats = (List<Object>) doc.get("latencies");
+                double p95 = calcP95(lats);
+                double avg = calcAvg(lats);
 
-            @SuppressWarnings("unchecked")
-            List<Object> lats = (List<Object>) doc.get("latencies");
-            double p95 = calcP95(lats);
-            double avg = calcAvg(lats);
+                return DashboardHttpDto.HttpBucket.builder()
+                        .statusCode(sc)
+                        .method(method)
+                        .p95Ms(p95)
+                        .avgMs(avg)
+                        .count(count)
+                        .build();
+            }).toList();
 
-            return DashboardHttpDto.HttpBucket.builder()
-                    .statusCode(sc)
-                    .method(method)
-                    .p95Ms(p95)
-                    .avgMs(avg)
-                    .count(count)
+            // Method summary
+            Map<String, long[]> methodMap = new LinkedHashMap<>();
+            Map<String, List<Double>> methodLat = new LinkedHashMap<>();
+            for (DashboardHttpDto.HttpBucket b : buckets) {
+                methodMap.computeIfAbsent(b.getMethod(), k -> new long[]{0})[0] += b.getCount();
+                methodLat.computeIfAbsent(b.getMethod(), k -> new ArrayList<>()).add(b.getAvgMs());
+            }
+
+            List<DashboardHttpDto.MethodSummary> methodSummary = methodMap.entrySet().stream()
+                    .map(e -> DashboardHttpDto.MethodSummary.builder()
+                            .method(e.getKey())
+                            .count(e.getValue()[0])
+                            .avgMs(methodLat.get(e.getKey()).stream()
+                                    .mapToDouble(Double::doubleValue).average().orElse(0))
+                            .build())
+                    .sorted(Comparator.comparingLong(DashboardHttpDto.MethodSummary::getCount).reversed())
+                    .toList();
+
+            return DashboardHttpDto.builder()
+                    .latencyByStatusAndMethod(buckets)
+                    .methodSummary(methodSummary)
                     .build();
-        }).toList();
-
-        // Method summary
-        Map<String, long[]> methodMap = new LinkedHashMap<>();
-        Map<String, List<Double>> methodLat = new LinkedHashMap<>();
-        for (DashboardHttpDto.HttpBucket b : buckets) {
-            methodMap.computeIfAbsent(b.getMethod(), k -> new long[]{0})[0] += b.getCount();
-            methodLat.computeIfAbsent(b.getMethod(), k -> new ArrayList<>()).add(b.getAvgMs());
+        } catch (Exception e) {
+            log.error("[http] Error al calcular métricas HTTP para system={} from={} to={}", system, from, to, e);
+            return DashboardHttpDto.builder()
+                    .latencyByStatusAndMethod(List.of())
+                    .methodSummary(List.of())
+                    .build();
         }
-
-        List<DashboardHttpDto.MethodSummary> methodSummary = methodMap.entrySet().stream()
-                .map(e -> DashboardHttpDto.MethodSummary.builder()
-                        .method(e.getKey())
-                        .count(e.getValue()[0])
-                        .avgMs(methodLat.get(e.getKey()).stream()
-                                .mapToDouble(Double::doubleValue).average().orElse(0))
-                        .build())
-                .sorted(Comparator.comparingLong(DashboardHttpDto.MethodSummary::getCount).reversed())
-                .toList();
-
-        return DashboardHttpDto.builder()
-                .latencyByStatusAndMethod(buckets)
-                .methodSummary(methodSummary)
-                .build();
     }
 
+
     /**
-     * Salud de todos los sistemas del tenant en las últimas 24 horas.
-     * INACTIVE = sin logs en las últimas 24h
-     * HEALTHY  = errorRate < umbral WARN
-     * WARN     = errorRate >= umbral WARN
-     * CRIT     = errorRate >= umbral CRIT
+     * Salud de todos los sistemas del tenant.
+     * <p>Lógica unificada:</p>
+     * <ul>
+     *   <li>INACTIVE: sin logs en las últimas 24 h.</li>
+     *   <li>CRITICAL: logs en las últimas 24 h y tasa de error &gt; 10%.</li>
+     *   <li>WARNING:  logs en las últimas 24 h y tasa de error entre 1% y 10%.</li>
+     *   <li>STABLE:   logs en las últimas 24 h y tasa de error &lt; 1%.</li>
+     * </ul>
      */
     public List<SystemHealthDto> systemsHealth(Authentication auth) {
-        AuthUser user     = (AuthUser) auth.getPrincipal();
+        AuthUser user = (AuthUser) auth.getPrincipal();
         ObjectId tenantId = user.getTenantId();
 
-        // ── DEBUG TEMPORAL ────────────────────────────────────────────────────
-        log.info("[Health] tenantId: {}", tenantId);
-        log.info("[Health] isOrgWide: {}", user.isOrgWide());
-        log.info("[Health] roles: {}", user.getRoles());
-        // ─────────────────────────────────────────────────────────────────────
-
-        Instant from = Instant.now().minus(24, java.time.temporal.ChronoUnit.HOURS);
-        Instant to   = Instant.now();
-
-        // Obtener todos los sistemas del tenant
         org.springframework.data.mongodb.core.query.Query q =
                 new org.springframework.data.mongodb.core.query.Query(
                         Criteria.where("tenant_id").is(tenantId));
         List<String> allSystems = mongoTemplate.findDistinct(
                 q, "system", "log_events", String.class);
 
-        // ── DEBUG TEMPORAL ────────────────────────────────────────────────────
-        log.info("[Health] sistemas encontrados: {}", allSystems);
-        // ─────────────────────────────────────────────────────────────────────
-
         List<SystemHealthDto> result = new ArrayList<>();
+        Instant now = Instant.now();
 
         for (String system : allSystems) {
             if (system == null || system.isBlank()) continue;
 
-            // Saltar sistemas a los que el usuario no tiene acceso
-            boolean isAdminOrOwner = user.getRoles() != null &&
-                    (user.getRoles().contains("ORG_ADMIN") ||
-                            user.getRoles().contains("ORG_OWNER"));
-            boolean isUnrestricted = isAdminOrOwner ||
-                    (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()));
+            if (!hasSystemAccess(user, system)) continue;
 
-            if (!isUnrestricted) {
-                List<String> allowed = user.getAllowedSystems() != null
-                        ? user.getAllowedSystems() : List.of();
-                if (!allowed.contains(system)) continue;
-            }
-
-            // Contar eventos de las últimas 24h para este sistema
-            MatchOperation matchOp = Aggregation.match(new Criteria().andOperator(
-                    Criteria.where("tenant_id").is(tenantId),
-                    Criteria.where("system").is(system),
-                    Criteria.where("eventTime").gte(Date.from(from)).lt(Date.from(to))
-            ));
-
-            GroupOperation groupOp = Aggregation.group()
-                    .count().as("total")
-                    .sum(new AggregationExpression() {
-                        @Override
-                        public Document toDocument(AggregationOperationContext ctx) {
-                            return new Document("$cond", Arrays.asList(
-                                    new Document("$eq", Arrays.asList("$outcome", "FAILURE")),
-                                    1, 0));
-                        }
-                    }).as("failures");
-
-            AggregationResults<Document> aggResult = mongoTemplate.aggregate(
-                    Aggregation.newAggregation(matchOp, groupOp),
-                    "log_events", Document.class);
-
-            Document stats = aggResult.getUniqueMappedResult();
-            long total    = stats != null ? ((Number) stats.getOrDefault("total",    0)).longValue() : 0L;
-            long failures = stats != null ? ((Number) stats.getOrDefault("failures", 0)).longValue() : 0L;
-
-            log.info("[Health] sistema={} total={} failures={}", system, total, failures);
-
-            if (total == 0) {
-                result.add(new SystemHealthDto(system, "INACTIVE", 0, 0, 0));
-                continue;
-            }
-
-            double errorRate = (double) failures / total;
-
-            // Usar los umbrales configurados para este sistema
-            backlogs.dinamico.config.AlertThresholdConfig.Thresholds t =
-                    alertThresholdConfig.getThresholds(system);
-
-            String status;
-            if (errorRate >= t.crit())      status = "CRIT";
-            else if (errorRate >= t.warn()) status = "WARN";
-            else                            status = "HEALTHY";
-
-            result.add(new SystemHealthDto(system, status, errorRate, total, failures));
+            HealthResult hr = computeSystemHealth(tenantId, system, now);
+            result.add(new SystemHealthDto(
+                    system, hr.status(), hr.errorRate(), hr.total(), hr.errors()));
         }
 
-        // Ordenar: CRIT primero, luego WARN, luego HEALTHY, luego INACTIVE
         result.sort(Comparator.comparingInt(s -> switch (s.status()) {
-            case "CRIT"     -> 0;
-            case "WARN"     -> 1;
-            case "HEALTHY"  -> 2;
+            case "CRITICAL" -> 0;
+            case "WARNING"  -> 1;
+            case "STABLE"   -> 2;
             default         -> 3;
         }));
 
         return result;
     }
+
+    /**
+     * Calcula la salud de un sistema según lastSeen y tasa de error en 24 h.
+     */
+    public String computeOverallHealth(Authentication auth, String system) {
+        AuthUser user = (AuthUser) auth.getPrincipal();
+        ObjectId tenantId = user.getTenantId();
+        if (!hasSystemAccess(user, system)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "system_not_allowed");
+        }
+        return computeSystemHealth(tenantId, system, Instant.now()).status();
+    }
+
+    private HealthResult computeSystemHealth(ObjectId tenantId, String system, Instant now) {
+        Instant cutoff = now.minus(24, ChronoUnit.HOURS);
+
+        // Último log recibido (lastSeen)
+        org.springframework.data.mongodb.core.query.Query lastQuery =
+                new org.springframework.data.mongodb.core.query.Query(
+                        Criteria.where("tenant_id").is(tenantId)
+                                .and("system").regex("^" + Pattern.quote(system) + "$", "i"))
+                        .with(Sort.by(Sort.Direction.DESC, "eventTime"))
+                        .limit(1);
+        Document lastDoc = mongoTemplate.findOne(lastQuery, Document.class, COLLECTION);
+        Instant lastSeen = lastDoc != null && lastDoc.getDate("eventTime") != null
+                ? lastDoc.getDate("eventTime").toInstant()
+                : null;
+
+        if (lastSeen == null || lastSeen.isBefore(cutoff)) {
+            return new HealthResult("INACTIVE", 0.0, 0, 0);
+        }
+
+        // Conteo total y errores en las últimas 24 h
+        Criteria criteria = Criteria.where("tenant_id").is(tenantId)
+                .and("system").regex("^" + Pattern.quote(system) + "$", "i")
+                .and("eventTime").gte(cutoff).lte(now);
+
+        Aggregation agg = Aggregation.newAggregation(
+                Aggregation.match(criteria),
+                Aggregation.group()
+                        .count().as("total")
+                        .sum(new AggregationExpression() {
+                            @Override
+                            public Document toDocument(AggregationOperationContext ctx) {
+                                return new Document("$cond", Arrays.asList(
+                                        new Document("$or", List.of(
+                                                new Document("$eq", Arrays.asList("$outcome", "FAILURE")),
+                                                new Document("$eq", Arrays.asList("$isError", true)),
+                                                new Document("$in", Arrays.asList("$status", List.of("ERROR", "FAILED", "REJECTED")))
+                                        )),
+                                        1, 0));
+                            }
+                        }).as("errors")
+        );
+
+        AggregationResults<Document> aggResult = mongoTemplate.aggregate(agg, COLLECTION, Document.class);
+        Document stats = aggResult.getUniqueMappedResult();
+        long total = stats != null ? ((Number) stats.getOrDefault("total", 0)).longValue() : 0L;
+        long errors = stats != null ? ((Number) stats.getOrDefault("errors", 0)).longValue() : 0L;
+
+        if (total == 0) {
+            return new HealthResult("STABLE", 0.0, 0, 0);
+        }
+
+        double errorRate = (double) errors / total;
+        String status;
+        if (errorRate > 0.10)      status = "CRITICAL";
+        else if (errorRate >= 0.01) status = "WARNING";
+        else                        status = "STABLE";
+
+        return new HealthResult(status, errorRate, total, errors);
+    }
+
+    private boolean hasSystemAccess(AuthUser user, String system) {
+        boolean isAdminOrOwner = user.getRoles() != null &&
+                (user.getRoles().contains("ORG_ADMIN") || user.getRoles().contains("ORG_OWNER"));
+        boolean isUnrestricted = isAdminOrOwner ||
+                (user.isOrgWide() && (user.getAllowedSystems() == null || user.getAllowedSystems().isEmpty()));
+        if (isUnrestricted) return true;
+
+        List<String> allowed = user.getAllowedSystems() == null
+                ? List.of()
+                : user.getAllowedSystems();
+        return allowed.stream()
+                .filter(StringUtils::hasText)
+                .map(s -> s.trim().toUpperCase(Locale.ROOT))
+                .anyMatch(s -> s.equalsIgnoreCase(system));
+    }
+
+    private record HealthResult(String status, double errorRate, long total, long errors) {
+    }
+
 
     // ── GEO ───────────────────────────────────────────────────────────────────
 
@@ -359,11 +436,11 @@ public class LogDashboardService {
 
         Criteria c = Criteria.where("tenant_id").is(tenantId);
 
-        // System scope
+        // System scope — case-insensitive para alinear requests con el casing almacenado
         if (StringUtils.hasText(system)) {
             String sys = system.trim().toUpperCase(Locale.ROOT);
             scopeGuard.requireSystemAccess(user, sys);
-            c = c.and("system").is(sys);
+            c = c.and("system").regex("^" + Pattern.quote(sys) + "$", "i");
         } else if (!user.isOrgWide()) {
             List<String> allowed = user.getAllowedSystems() == null ? List.of()
                     : user.getAllowedSystems().stream()
@@ -377,11 +454,14 @@ public class LogDashboardService {
             c = c.and("system").in(user.getAllowedSystems());
         }
 
-        // Rango de fechas — default: últimos 30 días si no viene
-        Instant effectiveFrom = from != null ? from : Instant.now().minusSeconds(30L * 24 * 3600);
-        Instant effectiveTo   = to != null   ? to   : Instant.now();
-
-        c = c.and("eventTime").gte(effectiveFrom).lt(effectiveTo);
+        // Rango de fechas: solo se aplica si el llamador lo solicita explícitamente.
+        // Las métricas operativas aplican su propio default (24h); las analíticas
+        // consultan todo el historial cuando from/to son null.
+        if (from != null || to != null) {
+            Instant effectiveFrom = from != null ? from : Instant.EPOCH;
+            Instant effectiveTo   = to != null   ? to   : Instant.now();
+            c = c.and("eventTime").gte(effectiveFrom).lt(effectiveTo);
+        }
 
         // Aplicar logFilters del VIEWER
         return LogFilterCriteria.apply(c);
@@ -390,6 +470,12 @@ public class LogDashboardService {
     private long countWithCriteria(Criteria c) {
         return mongoTemplate.count(
                 new org.springframework.data.mongodb.core.query.Query(c), COLLECTION);
+    }
+
+    private long countHistoricalLogs(Authentication auth, String system) {
+        // Conteo histórico total del sistema, sin filtro de fecha.
+        Criteria base = buildBaseCriteria(auth, system, null, null);
+        return countWithCriteria(base);
     }
 
     /** Agrupa por un campo, devuelve top N con porcentaje */
@@ -526,11 +612,80 @@ public class LogDashboardService {
                 .average().orElse(0);
     }
 
+    // ── Range metrics helpers ─────────────────────────────────────────────────
+
+    private long countErrors(Criteria base) {
+        Criteria errorCriteria = new Criteria().andOperator(base, buildErrorCriteria());
+        return countWithCriteria(errorCriteria);
+    }
+
+    private long countSuccesses(Criteria base) {
+        Criteria successCriteria = new Criteria().andOperator(base, buildSuccessCriteria());
+        return countWithCriteria(successCriteria);
+    }
+
+    private long countActiveCases(Criteria base) {
+        Aggregation agg = Aggregation.newAggregation(
+                Aggregation.match(base),
+                Aggregation.match(Criteria.where("caseId").exists(true).ne(null).ne("")),
+                Aggregation.group().addToSet("caseId").as("uniqueCases")
+        );
+        AggregationResults<Document> result = mongoTemplate.aggregate(agg, COLLECTION, Document.class);
+        Document doc = result.getUniqueMappedResult();
+        if (doc == null) return 0L;
+        List<?> cases = (List<?>) doc.get("uniqueCases");
+        return cases != null ? cases.size() : 0L;
+    }
+
+    private Criteria buildErrorCriteria() {
+        return new Criteria().orOperator(
+                Criteria.where("isError").is(true),
+                Criteria.where("status").in("ERROR", "FAIL", "FAILURE", "KO", "REJECTED"),
+                Criteria.where("outcome").in("FAILURE", "ERROR", "FAILED"),
+                Criteria.where("severity").in("ERROR", "CRITICAL", "FATAL")
+        );
+    }
+
+    private Criteria buildSuccessCriteria() {
+        return new Criteria().orOperator(
+                Criteria.where("status").in("SUCCESS", "OK", "COMPLETED"),
+                Criteria.where("outcome").in("SUCCESS", "OK")
+        );
+    }
+
+    private String determineRangeHealthStatus(long totalEvents, double errorRate) {
+        if (totalEvents == 0) return "INACTIVE";
+        if (errorRate > 10.0) return "CRITICAL";
+        if (errorRate > 0.0) return "WARNING";
+        return "STABLE";
+    }
+
     private DashboardStatsDto emptyStats() {
         return DashboardStatsDto.builder()
                 .total(0).topEventTypes(List.of()).outcomes(List.of())
                 .severities(List.of()).statuses(List.of()).topTags(List.of())
                 .topLocations(List.of()).topActors(List.of()).environments(List.of())
                 .build();
+    }
+
+    /**
+     * Resuelve el rango operacional de "Hoy".
+     * - Si llegan from/to explícitos, se usan tal cual (truncados a segundos).
+     * - Si no llegan, se usa el día en curso completo desde 00:00:00 UTC
+     *   hasta ahora + 6 h (zona horaria de los logs).
+     */
+    private InstantRange resolveOperationalRange(Instant from, Instant to) {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        if (from != null || to != null) {
+            Instant effectiveFrom = from != null ? from.truncatedTo(ChronoUnit.SECONDS) : Instant.EPOCH;
+            Instant effectiveTo = to != null ? to.truncatedTo(ChronoUnit.SECONDS) : now.plus(6, ChronoUnit.HOURS);
+            return new InstantRange(effectiveFrom, effectiveTo);
+        }
+        // Día completo en UTC
+        Instant startOfDay = now.truncatedTo(ChronoUnit.DAYS);
+        return new InstantRange(startOfDay, now.plus(6, ChronoUnit.HOURS));
+    }
+
+    private record InstantRange(Instant from, Instant to) {
     }
 }

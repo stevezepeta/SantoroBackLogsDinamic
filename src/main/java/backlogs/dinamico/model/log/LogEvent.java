@@ -55,6 +55,16 @@ import java.util.Map;
                 def = "{'tenant_id':1,'eventTime':-1,'isError':1,'messageKey':1}"),
         @CompoundIndex(name = "idx_tenant_system_eventCode_time_v2",
                 def = "{'tenant_id':1,'system':1,'eventCode':1,'eventTime':-1}"),
+
+        // Índices globales de alto rendimiento para el dashboard
+        @CompoundIndex(name = "idx_system_time_v1",
+                def = "{'system':1,'eventTime':-1}"),
+
+        @CompoundIndex(name = "idx_system_time_status_outcome_severity_v1",
+                def = "{'system':1,'eventTime':-1,'status':1,'outcome':1,'severity':1}"),
+
+        @CompoundIndex(name = "idx_time_status_v1",
+                def = "{'eventTime':-1,'status':1}"),
 })
 public class LogEvent {
 

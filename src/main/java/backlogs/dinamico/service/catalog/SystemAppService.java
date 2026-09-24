@@ -11,10 +11,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -80,6 +82,20 @@ public class SystemAppService {
   public void delete(ObjectId id) {
     if (!repo.existsById(id)) throw new ResponseStatusException(NOT_FOUND);
     repo.deleteById(id);
+  }
+
+  /**
+   * Devuelve un mapa code-uppercase -> nombre visible para los sistemas activos del tenant.
+   * Útil para enriquecer respuestas analíticas sin exponer la entidad completa.
+   */
+  public Map<String, String> getDisplayNamesByCode(ObjectId tenantId) {
+    return repo.findAllByTenantIdAndStatus(tenantId, "active").stream()
+        .filter(a -> a.getCode() != null)
+        .collect(Collectors.toMap(
+            a -> a.getCode().toUpperCase(Locale.ROOT),
+            a -> StringUtils.hasText(a.getName()) ? a.getName() : a.getCode(),
+            (a, b) -> a
+        ));
   }
 
   // ── Helper ────────────────────────────────────────────────────────────────

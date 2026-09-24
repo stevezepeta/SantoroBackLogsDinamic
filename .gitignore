@@ -26,6 +26,18 @@ target/
 *.ipr
 out/
 
+# Archivos de Configuración Principal de Spring Boot
+src/main/resources/application.properties
+src/main/resources/application.yml
+src/main/resources/application.yaml
+src/main/resources/application-*.yml
+src/main/resources/application-*.properties
+
+# Scripts y Notas Locales
+prompt.txt
+*.ps1
+verificar-pipeline-fix.ps1
+
 ### NetBeans ###
 /nbproject/private/
 /nbbuild/
@@ -98,6 +110,42 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 yarn.lock
+
+### Certificados, Llaves y Almacenes de Claves ###
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.der
+*.crt
+*.cert
+
+### Bases de Datos y Volcados (respaldos, dumps, archivos planos) ###
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+
+### Perfiles Locales de Spring Boot ###
+application-local.yml
+application-local.properties
+application-local.yaml
+application-*-local.yml
+application-*-local.properties
+
+### Entornos Virtuales Python ###
+.venv/
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+
+### Crash Logs de la JVM ###
+hs_err_pid*
+replay_pid*
 
 ### Otros ###
 *.pid

@@ -1,0 +1,70 @@
+operational:
+  catalog:
+    TRUSTVALUE:
+      INICIO_SESION:
+        SUCCESS:
+          title: "Inicio de sesión"
+          description: "El usuario inició sesión correctamente en la aplicación."
+          action: "Continuar con el flujo de asistencia."
+          icon: "login"
+        REJECTED:
+          title: "Error al iniciar sesión"
+          description: "El usuario no pudo iniciar sesión en la aplicación."
+          action: "Verificar credenciales, estado de conexión y versión de la app."
+          icon: "login-error"
+        ERROR:
+          title: "Error al iniciar sesión"
+          description: "Ocurrió un error técnico al intentar iniciar sesión."
+          action: "Verificar estado del servicio de autenticación y conectividad."
+          icon: "login-error"
+
+      SELECCION_SUCURSAL:
+        SUCCESS:
+          title: "Sucursal seleccionada"
+          description: "El usuario eligió la sucursal donde registrará su asistencia."
+          action: "Continuar con el siguiente paso del trámite."
+          icon: "office"
+        REJECTED:
+          title: "Error al seleccionar sucursal"
+          description: "No se pudo confirmar la sucursal seleccionada."
+          action: "Verificar permisos de ubicación y que la sucursal esté activa."
+          icon: "office-error"
+        ERROR:
+          title: "Error al seleccionar sucursal"
+          description: "Ocurrió un error técnico al cargar las sucursales disponibles."
+          action: "Verificar conectividad y sincronización de catálogos."
+          icon: "office-error"
+
+      ENVIAR_EVIDENCIAS:
+        SUCCESS:
+          title: "Evidencias cargadas"
+          description: "El usuario completó la carga de fotografías con éxito."
+          action: "Continuar con el cierre de la jornada."
+          icon: "image-check"
+        REJECTED:
+          title: "Fallo al enviar evidencias"
+          description: "No se pudieron recibir las fotografías del usuario."
+          action: "Verificar conectividad, permisos de cámara y espacio disponible en el dispositivo."
+          icon: "image-broken"
+        ERROR:
+          title: "Fallo al enviar evidencias"
+          description: "Ocurrió un error técnico durante el envío de evidencias."
+          action: "Pedir al empleado que reintente la carga y verifique su conexión a internet."
+          icon: "image-broken"
+
+      FINALIZAR_ASISTENCIA:
+        SUCCESS:
+          title: "Jornada cerrada"
+          description: "El usuario finalizó su jornada laboral correctamente."
+          action: "La asistencia quedó registrada con éxito."
+          icon: "check-circle"
+        REJECTED:
+          title: "Error al cerrar jornada"
+          description: "No se pudo finalizar el registro de asistencia."
+          action: "Verificar que se hayan completado los pasos anteriores y reintentar."
+          icon: "alert-circle"
+        ERROR:
+          title: "Error al cerrar jornada"
+          description: "Ocurrió un error técnico al cerrar la jornada laboral."
+          action: "Verificar sincronización con el servidor y reintentar el cierre."
+          icon: "alert-circle"

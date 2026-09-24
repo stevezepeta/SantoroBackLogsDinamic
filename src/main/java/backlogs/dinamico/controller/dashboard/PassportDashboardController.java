@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
@@ -134,7 +135,7 @@ public class PassportDashboardController {
     @GetMapping("/events")
     public ApiResponse<Map<String, Object>> searchEvents(
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "20") int size,
             @RequestParam(defaultValue = "DESC") String sortDir,
             @RequestParam(required = false) String sortBy,
 
@@ -164,11 +165,13 @@ public class PassportDashboardController {
     ) {
         Instant from = (fromDate != null)
                 ? fromDate.atStartOfDay().toInstant(ZoneOffset.UTC)
-                : PassportOverviewService.defaultFrom();
+                : Instant.now().minus(24, ChronoUnit.HOURS);
 
         Instant to = (toDate != null)
                 ? toDate.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC)
-                : PassportOverviewService.defaultTo();
+                : Instant.now();
+
+        int safeSize = Math.min(size, 100);
 
         var result = passportEventService.searchPassportEvents(
                 PASSPORT_SYSTEM,
@@ -186,7 +189,7 @@ public class PassportDashboardController {
                 normalize(message),
                 normalize(reasonCode),
                 page,
-                size,
+                safeSize,
                 sortBy,
                 sortDir
         );

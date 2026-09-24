@@ -3,6 +3,7 @@ package backlogs.dinamico.service.dashboard;
 import backlogs.dinamico.api.dto.passport.PassportSummaryResponse;
 import backlogs.dinamico.api.dto.passport.PassportsByOfficeItem;
 import backlogs.dinamico.api.dto.passport.PassportsByTypeItem;
+import backlogs.dinamico.infra.cache.TimedCache;
 import backlogs.dinamico.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -11,6 +12,7 @@ import org.bson.types.ObjectId;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
+import org.springframework.data.mongodb.core.aggregation.AggregationOptions;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.stereotype.Service;
@@ -31,11 +33,20 @@ public class PassportOverviewService {
 
     private final MongoTemplate mongoTemplate;
 
+    private final TimedCache<PassportSummaryResponse> summaryCache =
+            new TimedCache<>("passport-summary", java.time.Duration.ofSeconds(30));
+    private final TimedCache<List<PassportsByOfficeItem>> byOfficeCache =
+            new TimedCache<>("passport-by-office", java.time.Duration.ofSeconds(30));
+    private final TimedCache<List<PassportsByTypeItem>> byTypeCache =
+            new TimedCache<>("passport-by-type", java.time.Duration.ofSeconds(30));
+
     /**
      * SWITCH INMEDIATO:
      * ahora todo el dashboard de pasaportes se calcula desde log_events (esquema universal).
      */
     private static final String COLLECTION = "log_events";
+    private static final String HINT_INDEX = "idx_tenant_system_time_v2";
+    private static final int CURSOR_BATCH_SIZE = 1000;
 
     // Helpers para fechas por defecto
     public static Instant defaultFrom() {
@@ -79,21 +90,29 @@ public class PassportOverviewService {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
+        String cacheKey = buildSummaryKey(tenantId, passportSystem, from, to, officeId, userId, channel, operationType, status);
+        return summaryCache.get(cacheKey, () -> buildSummary(
+                tenantId, passportSystem, from, to, officeId, userId, channel, operationType, status
+        ));
+    }
+
+    private PassportSummaryResponse buildSummary(
+            ObjectId tenantId,
+            String passportSystem,
+            Instant from,
+            Instant to,
+            String officeId,
+            String userId,
+            String channel,
+            String operationType,
+            String status
+    ) {
+        InstantRange range = resolveTimeRange(from, to);
+
         List<Criteria> criteriaList = new ArrayList<>();
-        criteriaList.add(Criteria.where("tenantId").is(tenantId));
+        criteriaList.add(Criteria.where("tenant_id").is(tenantId));
         criteriaList.add(Criteria.where("system").is(passportSystem));
-
-        // Fechas solo si vienen
-        if (from != null || to != null) {
-            Criteria time = Criteria.where("eventTime");
-            if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to); // exclusivo para que cuente bien por día
-            criteriaList.add(time);
-        }
-
-        if (StringUtils.hasText(officeId)) {
-            criteriaList.add(Criteria.where("location.locationId").is(officeId));
-        }
+        criteriaList.add(Criteria.where("eventTime").gte(range.from()).lt(range.to()));
 
         if (StringUtils.hasText(userId)) {
             criteriaList.add(Criteria.where("actor.actorId").is(userId));
@@ -119,9 +138,9 @@ public class PassportOverviewService {
         // Totales por status
         Aggregation totalsAgg = newAggregation(
                 match(baseCriteria),
-                project("status"),
+                project("status").andExclude("_id"),
                 group("status").count().as("count")
-        );
+        ).withOptions(buildAggregationOptions(HINT_INDEX));
 
         AggregationResults<Document> totalsResults =
                 mongoTemplate.aggregate(totalsAgg, COLLECTION, Document.class);
@@ -146,12 +165,13 @@ public class PassportOverviewService {
         // Por día
         Aggregation perDayAgg = newAggregation(
                 match(baseCriteria),
+                project("status", "eventTime").andExclude("_id"),
                 project("status")
                         .andExpression("{ $dateToString: { date: \"$eventTime\", format: \"%Y-%m-%d\", timezone: \"UTC\" } }")
                         .as("fecha"),
                 group("fecha", "status").count().as("count"),
                 sort(Sort.Direction.ASC, "_id.fecha")
-        );
+        ).withOptions(buildAggregationOptions(HINT_INDEX));
 
         AggregationResults<Document> perDayResults =
                 mongoTemplate.aggregate(perDayAgg, COLLECTION, Document.class);
@@ -195,8 +215,8 @@ public class PassportOverviewService {
                         .toList();
 
         return new PassportSummaryResponse(
-                from,
-                to,
+                range.from(),
+                range.to(),
                 new PassportSummaryResponse.Totales(
                         emitidos,
                         enTramite,
@@ -207,29 +227,43 @@ public class PassportOverviewService {
         );
     }
 
+    private String buildSummaryKey(
+            ObjectId tenantId,
+            String passportSystem,
+            Instant from,
+            Instant to,
+            String officeId,
+            String userId,
+            String channel,
+            String operationType,
+            String status
+    ) {
+        return tenantId + "|" + passportSystem + "|" + from + "|" + to + "|"
+                + officeId + "|" + userId + "|" + channel + "|" + operationType + "|" + status;
+    }
+
     /*
      * Por oficina
      * Mapeo:
      * - officeId/officeName => location.locationId / location.locationName
      */
     public List<PassportsByOfficeItem> getByOffice(String passportSystem, Instant from, Instant to) {
-
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
-        List<Criteria> criteria = new ArrayList<>();
-        criteria.add(Criteria.where("tenantId").is(tenantId));
-        criteria.add(Criteria.where("system").is(passportSystem));
+        String cacheKey = tenantId + "|" + passportSystem + "|" + from + "|" + to;
+        return byOfficeCache.get(cacheKey, () -> buildByOffice(tenantId, passportSystem, from, to));
+    }
 
-        // Fechas opcionales
-        if (from != null || to != null) {
-            Criteria time = Criteria.where("eventTime");
-            if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to);
-            criteria.add(time);
-        }
+    private List<PassportsByOfficeItem> buildByOffice(ObjectId tenantId, String passportSystem, Instant from, Instant to) {
+        InstantRange range = resolveTimeRange(from, to);
+
+        List<Criteria> criteria = new ArrayList<>();
+        criteria.add(Criteria.where("tenant_id").is(tenantId));
+        criteria.add(Criteria.where("system").is(passportSystem));
+        criteria.add(Criteria.where("eventTime").gte(range.from()).lt(range.to()));
 
         Criteria baseCriteria = new Criteria().andOperator(criteria.toArray(new Criteria[0]));
 
@@ -240,7 +274,7 @@ public class PassportOverviewService {
                         .and("location.locationName").as("officeName"),
                 group("officeId", "officeName", "status").count().as("count"),
                 sort(Sort.Direction.ASC, "_id.officeName")
-        );
+        ).withOptions(buildAggregationOptions(HINT_INDEX));
 
         AggregationResults<Document> results =
                 mongoTemplate.aggregate(agg, COLLECTION, Document.class);
@@ -293,31 +327,31 @@ public class PassportOverviewService {
      * Por tipo (operationType del dashboard -> eventType universal)
      */
     public List<PassportsByTypeItem> getByType(String passportSystem, Instant from, Instant to) {
-
         ObjectId tenantId = TenantContext.getTenantId();
         if (tenantId == null) {
             throw new IllegalArgumentException("Tenant no resuelto en contexto");
         }
 
-        List<Criteria> criteria = new ArrayList<>();
-        criteria.add(Criteria.where("tenantId").is(tenantId));
-        criteria.add(Criteria.where("system").is(passportSystem));
+        String cacheKey = tenantId + "|" + passportSystem + "|" + from + "|" + to;
+        return byTypeCache.get(cacheKey, () -> buildByType(tenantId, passportSystem, from, to));
+    }
 
-        if (from != null || to != null) {
-            Criteria time = Criteria.where("eventTime");
-            if (from != null) time = time.gte(from);
-            if (to != null) time = time.lt(to);
-            criteria.add(time);
-        }
+    private List<PassportsByTypeItem> buildByType(ObjectId tenantId, String passportSystem, Instant from, Instant to) {
+        InstantRange range = resolveTimeRange(from, to);
+
+        List<Criteria> criteria = new ArrayList<>();
+        criteria.add(Criteria.where("tenant_id").is(tenantId));
+        criteria.add(Criteria.where("system").is(passportSystem));
+        criteria.add(Criteria.where("eventTime").gte(range.from()).lte(range.to()));
 
         Criteria baseCriteria = new Criteria().andOperator(criteria.toArray(new Criteria[0]));
 
         Aggregation agg = newAggregation(
                 match(baseCriteria),
-                project("eventType", "status"),
+                project("eventType", "status").andExclude("_id"),
                 group("eventType", "status").count().as("count"),
                 sort(Sort.Direction.ASC, "_id.eventType")
-        );
+        ).withOptions(buildAggregationOptions(HINT_INDEX));
 
         AggregationResults<Document> results =
                 mongoTemplate.aggregate(agg, COLLECTION, Document.class);
@@ -381,5 +415,22 @@ public class PassportOverviewService {
             return "EN_TRAMITE";
         }
         return s;
+    }
+
+    private InstantRange resolveTimeRange(Instant from, Instant to) {
+        Instant effectiveTo = to != null ? to : Instant.now();
+        Instant effectiveFrom = from != null ? from : effectiveTo.minus(24, java.time.temporal.ChronoUnit.HOURS);
+        return new InstantRange(effectiveFrom, effectiveTo);
+    }
+
+    private AggregationOptions buildAggregationOptions(String hint) {
+        return AggregationOptions.builder()
+                .cursorBatchSize(CURSOR_BATCH_SIZE)
+                .allowDiskUse(true)
+                .hint(hint)
+                .build();
+    }
+
+    private record InstantRange(Instant from, Instant to) {
     }
 }

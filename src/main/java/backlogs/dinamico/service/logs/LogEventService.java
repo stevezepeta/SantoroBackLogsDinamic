@@ -512,6 +512,7 @@ public class LogEventService {
 
         // ── Notificar dashboard en tiempo real ───────────────────────────────
         dashboardNotifier.notifyNewLog(tenantId, saved.getSystem());
+        dashboardNotifier.broadcastLogIngested(saved);
 
         return saved;
     }

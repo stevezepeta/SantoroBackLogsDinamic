@@ -148,7 +148,7 @@ public class SecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         var cfg = new CorsConfiguration();
-        cfg.setAllowedOriginPatterns(List.of("*"));  // Mejor compatibilidad con WebSockets
+        cfg.setAllowedOriginPatterns(List.of("*"));  // Compatible con credenciales y WebSockets
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 
         cfg.setAllowedHeaders(List.of(
@@ -165,7 +165,7 @@ public class SecurityConfig {
                 "X-Request-Id",
                 "X-Tenant", "X-Tenant-Id", "X-Organization-Id"
         ));
-        cfg.setAllowCredentials(false);
+        cfg.setAllowCredentials(true);
         cfg.setMaxAge(3600L);
 
         var source = new UrlBasedCorsConfigurationSource();

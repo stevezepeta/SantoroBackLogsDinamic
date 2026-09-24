@@ -105,6 +105,48 @@ public class AiLlmPrettyService {
         }
     }
 
+    /**
+     * Genera una explicación en lenguaje natural de un error técnico para un supervisor.
+     *
+     * @param context datos técnicos compactos del evento de error
+     * @return JSON con los campos summary, likelyCause, businessImpact, recommendedAction, confidence
+     */
+    public String explainErrorForSupervisor(String context) {
+        String system = """
+                Eres un asistente de operaciones que explica errores técnicos a supervisores no técnicos.
+                Usa ÚNICAMENTE los datos proporcionados. No inventes causas.
+                Si no hay suficiente evidencia, indícalo como "posible causa" y baja la confianza.
+                Responde ÚNICAMENTE con JSON válido. Sin markdown. Sin texto extra.
+                """;
+
+        String user = """
+                Responde con un JSON válido con esta estructura EXACTA:
+
+                {
+                  "summary": "Una frase simple que entienda un supervisor.",
+                  "likelyCause": "Causa probable basada solo en los datos.",
+                  "businessImpact": "Impacto en la operación del usuario o cliente.",
+                  "recommendedAction": "Acción concreta que puede tomar el supervisor.",
+                  "confidence": "ALTA|MEDIA|BAJA"
+                }
+
+                DATOS DEL EVENTO:
+                %s
+                """.formatted(context);
+
+        try {
+            ChatClient chatClient = chatClientBuilder.build();
+            return chatClient.prompt()
+                    .system(system)
+                    .user(user)
+                    .call()
+                    .content();
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw new RuntimeException("LLM no disponible: " + e.getClass().getSimpleName() + " - " + e.getMessage(), e);
+        }
+    }
+
     private DailyManagerPrettyDto fallback(DailyManagerSummaryDto mgr, String reason) {
         DailyManagerPrettyDto out = new DailyManagerPrettyDto();
         out.base = mgr;
