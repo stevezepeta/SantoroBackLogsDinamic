@@ -7,21 +7,6 @@ import org.springframework.stereotype.Component;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Catálogo operativo de mensajes amigables para supervisores.
- * Carga su contenido desde classpath:operational-messages.yml.
- *
- * Estructura del YAML:
- *   operational:
- *     catalog:
- *       <SYSTEM>:
- *         <EVENT_CODE>:
- *           <STATUS>:
- *             title: ...
- *             description: ...
- *             action: ...
- *             icon: ...
- */
 @Data
 @Component
 @ConfigurationProperties(prefix = "operational")
@@ -29,14 +14,6 @@ public class OperationalMessageCatalog {
 
     private Map<String, Map<String, Map<String, OperationalMessage>>> catalog = new HashMap<>();
 
-    /**
-     * Busca un mensaje operativo por sistema, código de evento y estado.
-     *
-     * @param system    sistema (ej. TRUSTVALUE)
-     * @param eventCode código del evento (ej. ENVIAR_EVIDENCIAS)
-     * @param status    estado técnico (ej. SUCCESS, REJECTED, ERROR)
-     * @return mensaje operativo o null si no existe
-     */
     public OperationalMessage find(String system, String eventCode, String status) {
         if (system == null || eventCode == null || status == null) {
             return null;

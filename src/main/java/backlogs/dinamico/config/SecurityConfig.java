@@ -37,6 +37,13 @@ public class SecurityConfig {
     @Value("${security.basic.enabled:false}")
     private boolean basicEnabled;
 
+    /**
+     * Orígenes permitidos para CORS (separados por coma).
+     * Por defecto permite el Dashboard en producción y los puertos típicos de desarrollo.
+     */
+    @Value("${app.cors.allowed-origins:https://dashboard.grupo-santoro.com.mx,http://localhost:4200,http://localhost:3000,http://localhost:5173}")
+    private String[] allowedOrigins;
+
     private final ObjectProvider<ApiKeyTenantFilter> apiKeyTenantFilterProvider;
     private final JwtAuthFilter jwtAuthFilter;
     private final TenantResolutionFilter tenantResolutionFilter;
@@ -148,7 +155,9 @@ public class SecurityConfig {
     @Bean
     CorsConfigurationSource corsConfigurationSource() {
         var cfg = new CorsConfiguration();
-        cfg.setAllowedOriginPatterns(List.of("*"));  // Compatible con credenciales y WebSockets
+        // Orígenes explícitos (compatible con allowCredentials). El Dashboard de
+        // producción 'https://dashboard.grupo-santoro.com.mx' SIEMPRE está permitido.
+        cfg.setAllowedOriginPatterns(List.of(allowedOrigins));
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 
         cfg.setAllowedHeaders(List.of(

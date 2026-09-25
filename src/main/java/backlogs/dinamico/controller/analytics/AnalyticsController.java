@@ -8,10 +8,6 @@ import backlogs.dinamico.repository.log.LogEventRepository;
 import backlogs.dinamico.service.analytics.*;
 import backlogs.dinamico.tenant.TenantContext;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.media.Content;
-import io.swagger.v3.oas.annotations.media.ExampleObject;
-import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +37,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/api/analytics")
 @RequiredArgsConstructor
+@CrossOrigin(origins = "https://dashboard.grupo-santoro.com.mx", allowCredentials = "true")
 public class AnalyticsController {
 
     private final FunnelAnalyticsService funnelAnalyticsService;

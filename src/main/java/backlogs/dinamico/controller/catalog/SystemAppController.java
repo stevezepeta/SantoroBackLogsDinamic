@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/catalogs")
 @RequiredArgsConstructor
-@CrossOrigin
+@CrossOrigin(origins = "https://dashboard.grupo-santoro.com.mx", allowCredentials = "true")
 public class SystemAppController {
 
   private final SystemAppService service;
