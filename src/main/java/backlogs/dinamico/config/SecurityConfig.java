@@ -39,9 +39,10 @@ public class SecurityConfig {
 
     /**
      * Orígenes permitidos para CORS (separados por coma).
-     * Por defecto permite el Dashboard en producción y los puertos típicos de desarrollo.
+     * Por defecto permite el Dashboard en producción, el dashboard desplegado en
+     * 187.188.66.56:8032 y los puertos típicos de desarrollo.
      */
-    @Value("${app.cors.allowed-origins:https://dashboard.grupo-santoro.com.mx,http://localhost:4200,http://localhost:3000,http://localhost:5173}")
+    @Value("${app.cors.allowed-origins:https://dashboard.grupo-santoro.com.mx,http://187.188.66.56:8032,http://localhost:4200,http://localhost:3000,http://localhost:5173,http://localhost:9000}")
     private String[] allowedOrigins;
 
     private final ObjectProvider<ApiKeyTenantFilter> apiKeyTenantFilterProvider;

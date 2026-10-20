@@ -121,6 +121,12 @@ Guía paso a paso (día por día) para implementar Fase 1 completa en 3 semanas.
   - KPIs de rendimiento operativo
   - Soporte multi-sistema (CITA_GUYANA, TICKETS, TRUSTVALUE, PASSPORT, CITA_QUINTANAROO)
 
+- **[🧠 Propuesta Técnica - Inteligencia de Actividad y Usuarios](./PROPUESTA_INTELIGENCIA_ACTIVIDAD_USUARIOS.md)** ⭐ **PROPUESTA v2 (revisada)**  
+  Análisis y diseño (sin implementación) del módulo de analítica de usuarios y motor de anomalías
+  - Resolución de identidad con alias verificables y niveles de confianza (sin duplicar usuarios)
+  - Métricas DAU/WAU/MAU calendario y ventanas móviles, pipeline incremental + reconciliación idempotente
+  - Motor de anomalías con doble ciclo de vida (condición vs. investigación) y plan M0–M6 con diagnóstico de datos previo obligatorio
+
 ### 🤖 Agentes y Automatización
 
 - **[Agents](./AGENTS.md)**  

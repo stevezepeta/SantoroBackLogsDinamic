@@ -81,6 +81,8 @@ Sistema Externo
      Frontend / Dashboard UI
 ```
 
+> **Nota:** existe además una **API legacy** (`POST /api/logs`, colección `logs`, modelo `LogEntry`) que convive con la nueva. Se mantiene por compatibilidad pero el flujo principal descrito en este documento es el de `log_events`.
+
 ---
 
 ## 2. Flujo de Datos End-to-End
@@ -100,6 +102,8 @@ Sistema Externo
     │   ├── buildMessageKey: normaliza el mensaje para agrupación/deduplicación
     │   └── computeIsError: calcula boolean isError desde severity+status+outcome
     ├── Construye LogEvent y guarda en MongoDB (colección: log_events)
+    │   └── Al persistir, SeverityNormalizer (listener/callback de Mongo)
+    │       recalcula severity y deja el valor original en severityRaw
     ├── DeviceRegistryService.upsertFromLog() → actualiza colección devices_registry
     └── DashboardNotifier.notifyNewLog() → publica en WebSocket /topic/dashboard/{tenantId}/{system}
         ↓
@@ -116,7 +120,7 @@ Sistema Externo
 
 Colección MongoDB: **`log_events`**  
 Clase Java: `backlogs.dinamico.model.log.LogEvent`  
-DTO de ingesta: `backlogs.dinamico.api.dto.logs.LogEventIngestReq`
+DTO de ingesta: `backlogs.dinamico.api.dto.logs.LogEventIngestReq` (record con records anidados)
 
 ### 3.1 Campos Raíz
 
@@ -128,15 +132,16 @@ DTO de ingesta: `backlogs.dinamico.api.dto.logs.LogEventIngestReq`
 | `system` | `String` | **Sí** | Identificador del sistema que originó el log (ej: `TICKETS`, `HID_BIOMETRIC`, `SERVER_PRINCIPAL`). Se normaliza a **UPPERCASE** |
 | `environment` | `String` | No | Entorno de despliegue: `PROD`, `STAGING`, `DEV` |
 | `caseId` | `String` | **Sí** | Identificador del caso, transacción o dispositivo. Agrupa eventos relacionados bajo la misma "historia". Usado en el timeline |
-| `eventTime` | `Instant` | **Sí** | Timestamp del evento en UTC. Si no viene, se usa `Instant.now()` |
+| `eventTime` | `Instant` | **Sí** | Timestamp del evento en UTC |
 | `eventType` | `String` | **Sí** | Categoría del tipo de evento normalizada (ej: `APP_EVENT`, `SYSTEM_STARTUP`, `LOGIN`). Ver normalización abajo |
 | `eventCode` | `String` | Auto | Código numérico extraído del `eventType` raw (ej: `"1034"` de `APP_EVENT_1034`) |
 | `eventTypeRaw` | `String` | Auto | Valor original del eventType antes de normalizar (ej: `APP_EVENT_1034`) |
 | `status` | `String` | **Sí** | Estado del evento: `PENDING`, `ACTIVE`, `COMPLETED`, `ERROR`, `REJECTED`. Se normaliza a **UPPERCASE** |
 | `outcome` | `String` | No | Resultado del evento: `SUCCESS`, `FAILURE`, `IN_PROGRESS`, `CANCELED`. Se normaliza a **UPPERCASE** |
-| `severity` | `String` | No | Nivel de severidad normalizado: `INFO`, `WARN`, `ERROR`, `FATAL`. Valores de terceros se mapean automáticamente (ej: `CRITICAL` → `ERROR`) |
+| `severity` | `String` | No | Nivel de severidad normalizado: `DEBUG`, `INFO`, `WARN`, `ERROR`, `FATAL`. Valores de terceros se mapean automáticamente (ej: `CRITICAL` → `ERROR`, `LOW` → `INFO`, `MEDIUM` → `WARN`). Ver §3.11 |
+| `severityRaw` | `String` | Auto | Valor original de `severity` tal como lo envió el emisor, **antes** de normalizar. Se preserva automáticamente al persistir |
 | `message` | `String` | **Sí** | Descripción legible del evento. Se normaliza (trim, null-check) |
-| `messageKey` | `String` | Auto | Clave de normalización del mensaje: UUIDs, ObjectIds, números, IDs de sesión son reemplazados por tokens genéricos (`{uuid}`, `{n}`, etc.). Útil para agrupación y detección de patrones |
+| `messageKey` | `String` | Auto | Clave de normalización del mensaje: UUIDs, ObjectIds, números, IDs de sesión son reemplazados por tokens genéricos (`{uuid}`, `{n}`, etc.). Útil para agrupación y detección de patrones. Truncada a 160 chars |
 | `isError` | `Boolean` | Auto | `true` si severity es `ERROR`/`FATAL`, outcome es `FAILURE` o status es `REJECTED`/`ERROR` |
 
 ### 3.2 Actor
@@ -148,7 +153,7 @@ Quién realizó la acción que originó el evento.
 | `actor.id` | `String` | Identificador único del actor (ej: CURP, ID de empleado, UUID de servicio) |
 | `actor.type` | `String` | Tipo de actor: `USER`, `SERVICE`, `DEVICE`, `SYSTEM`. Se normaliza a UPPERCASE |
 | `actor.username` | `String` | Nombre de usuario o alias del actor |
-| `actor.fullName` | `String` | Nombre completo del actor |
+| `actor.fullName` | `String` | Nombre completo del actor. También se usa como `deviceId` preferente en el auto-registro de dispositivos |
 
 ### 3.3 Location
 
@@ -198,7 +203,7 @@ Razón o causa del evento, especialmente útil en errores y rechazos.
 
 | Campo | Tipo | Descripción |
 |---|---|---|
-| `reason.code` | `String` | Código del error o razón en UPPERCASE (ej: `AUTH_TOKEN_EXPIRED`) |
+| `reason.code` | `String` | Código del error o razón en UPPERCASE (ej: `AUTH_TOKEN_EXPIRED`). También se considera en la normalización de severidad (si contiene `ERR` → severity `ERROR`) |
 | `reason.description` | `String` | Descripción legible de la razón |
 
 ### 3.8 GeoPoint
@@ -215,7 +220,7 @@ Coordenadas geográficas del evento (formato GeoJSON estándar compatible con í
 
 ### 3.9 RemoteConnection
 
-Para eventos de conexiones remotas: SSH, RDP, VPN, acceso a base de datos, etc.
+Para eventos de conexiones remotas: SSH, RDP, VPN, acceso a base de datos, etc. Los campos llegan tal cual desde el emisor y se persisten sin cálculos adicionales en el backend; el consumidor principal actual es el **certificado de auditoría** (usa `remoteConnection.sourceIp` como fallback de extracción de IP, ver §14).
 
 | Campo | Tipo | Descripción |
 |---|---|---|
@@ -232,8 +237,8 @@ Para eventos de conexiones remotas: SSH, RDP, VPN, acceso a base de datos, etc.
 | `remoteConnection.clientType` | `String` | Tipo de cliente: `TERMINAL`, `WEB_CONSOLE`, `APP` |
 | `remoteConnection.sourceCountry` | `String` | País de origen de la IP |
 | `remoteConnection.sourceCity` | `String` | Ciudad de origen de la IP |
-| `remoteConnection.isLocalNetwork` | `Boolean` | `true` si la IP origen está en red local/privada |
-| `remoteConnection.riskScore` | `Double` | Puntuación de riesgo calculada (0.0 a 1.0) |
+| `remoteConnection.isLocalNetwork` | `Boolean` | `true` si la IP origen está en red local/privada (la calcula el emisor) |
+| `remoteConnection.riskScore` | `Double` | Puntuación de riesgo (0.0 a 1.0) calculada por el emisor |
 | `remoteConnection.metadata` | `Map<String,Object>` | Datos adicionales de la conexión de formato libre |
 
 ### 3.10 Tags, Payload, Meta
@@ -246,7 +251,7 @@ Para eventos de conexiones remotas: SSH, RDP, VPN, acceso a base de datos, etc.
 
 ### 3.11 Campos Calculados
 
-Generados automáticamente en `LogEventService.ingest()` — **nunca los envía el cliente**:
+Generados automáticamente en `LogEventService.ingest()` y al persistir (listener/callback de Mongo) — **nunca los envía el cliente como valores finales**:
 
 | Campo | Cómo se calcula |
 |---|---|
@@ -254,8 +259,9 @@ Generados automáticamente en `LogEventService.ingest()` — **nunca los envía 
 | `eventType` | `EventTypeNormalizer` extrae la categoría del raw (`APP_EVENT_1034` → `APP_EVENT`) |
 | `eventCode` | `EventTypeNormalizer` extrae el sufijo numérico (`APP_EVENT_1034` → `"1034"`) |
 | `eventTypeRaw` | El valor original del eventType en UPPERCASE |
-| `severity` | `LogNormalizationUtils.normalizeSeverity()` mapea valores de terceros al estándar |
-| `messageKey` | `LogNormalizationUtils.buildMessageKey()` normaliza el mensaje para deduplicación |
+| `severity` | Normalización en dos capas: `LogNormalizationUtils.normalizeSeverity()` en ingest, y `SeverityNormalizer` al persistir (`LogEventNormalizationListener` / `LogEventNormalizationCallback`). Reglas: si `status` es `ERROR`/`FATAL` → `ERROR`; si `outcome` o `reason.code` contienen `ERR` → `ERROR`; si no, `severityRaw` mapeado: `DEBUG`/`TRACE`→`DEBUG`, `WARN`/`WARNING`→`WARN`, `LOW`→`INFO`, `MEDIUM`→`WARN`, `CRITICAL`→`ERROR`, fallback `INFO` |
+| `severityRaw` | El valor original de `severity` preservado antes de normalizar (lo llenan el listener/callback al persistir) |
+| `messageKey` | `LogNormalizationUtils.buildMessageKey()` normaliza el mensaje para deduplicación (quita acentos, minúsculas, tokens `{uuid}`, `{oid}`, `{n}`, `{id}`, trunca a 160 chars) |
 | `isError` | `LogNormalizationUtils.computeIsError()` combina severity + status + outcome |
 
 ---
@@ -271,6 +277,7 @@ Content-Type: application/json
 ```
 
 - Solo acepta **API Key** (no JWT). Si se envía JWT, responde `403 human_jwt_cannot_ingest_logs`.
+- Body: `LogEventIngestReq` (ver §3 para todos los campos). Validaciones: `system`, `caseId`, `eventType`, `status`, `message` obligatorios; `eventTime` obligatorio; `outcome` ∈ `SUCCESS|FAILURE|IN_PROGRESS|CANCELED`; `severity` ∈ `DEBUG|INFO|ERROR|FATAL` (en la práctica acepta otros valores y los normaliza, ej. `CRITICAL`).
 - Límite: 1 evento por request.
 - Responde con `id`, `tenantId`, `system`, `caseId`, `eventTime` del log guardado.
 
@@ -299,7 +306,6 @@ Input raw del cliente
     ├─ system          → trim + UPPERCASE
     ├─ environment     → trim, null si vacío
     ├─ caseId          → trim, null si vacío o "null"
-    ├─ eventTime       → Instant.now() si null
     │
     ├─ EventTypeNormalizer.normalize(eventType)
     │     "APP_EVENT_1034" → {category:"APP_EVENT", code:"1034", raw:"APP_EVENT_1034"}
@@ -313,9 +319,14 @@ Input raw del cliente
     ├─ Tags → lowercase + distinct + filter(blank)
     │
     └─ Save → MongoDB (log_events)
+           │   └─ SeverityNormalizer (listener/callback onBeforeConvert):
+           │        severityRaw ← severity original
+           │        severity    ← recalculada (status/outcome/reason.code + mapeo raw)
+           │        messageKey / isError ← recalculados
            ↓
     DeviceRegistryService.upsertFromLog()   ← actualiza devices_registry
     DashboardNotifier.notifyNewLog()        ← WebSocket al frontend
+    DashboardNotifier.broadcastLogIngested() ← LogEvent completo a /topic/logs/{system}
 ```
 
 ---
@@ -343,6 +354,7 @@ Authorization: Bearer <jwt>
 | `actorId` | ID del actor |
 | `locationId` | ID de la ubicación |
 | `requestId` | ID de correlación del request |
+| `deviceId` | Filtrar por dispositivo. **Coincidencia exacta** (sin prefijos) contra `meta.deviceId`, `actor.id` o `actor.fullName` de los eventos — las tres son identidades legítimas del MISMO equipo: el agente escribe `meta.deviceId`/`actor.id` = hostname + último octeto de IP (p. ej. `WIN-MHRBTECSCC7-8`) y el registro (`GET /api/devices`, marcador = `actor.fullName`) usa el hostname (p. ej. `WIN-MHRBTECSCC7`). El filtro se aplica junto con `tenant_id`, `system`, fechas y paginación; `totalElements` refleja solo el conjunto filtrado |
 | `text` | Búsqueda de texto libre en `message` y `reason.description` (regex case-insensitive) |
 | `fromDate` / `toDate` | Rango de fechas (formato ISO date: `YYYY-MM-DD`) |
 | `page` / `size` | Paginación (default: 0 / 10) |
@@ -363,6 +375,10 @@ Mismos filtros que search pero `system` es opcional. Útil para el panel princip
 GET /api/logs/events/{id}
 Authorization: Bearer <jwt>
 ```
+
+### API legacy
+
+`GET /api/logs`, `GET /api/logs/{id}`, `GET /api/logs/stats/summary`, `GET /api/logs/stats/timeline` y `POST /api/logs` operan sobre la colección legacy `logs` (modelo `LogEntry`: `level`, `processType`, `device`, `scanDevice`, `scanType`, `officeId`, `personId`, `baseCode`, `errorCode`, `sessionToken`, `extra`). Se mantienen por compatibilidad con emisores antiguos.
 
 ---
 
@@ -387,8 +403,9 @@ Authorization: Bearer <jwt>
 
 Base path: `/api/logs/dashboard`  
 Requiere permiso: `PERM_LOG_READ`  
-Todos los endpoints aceptan `?system=` (opcional) y rango `?from=&to=` (ISO 8601 datetime).  
-Default de rango: últimos **30 días**.
+Todos los endpoints aceptan `?system=` (opcional) y rango `?from=&to=` (ISO 8601 datetime), o `?fromDate=&toDate=`.  
+Default de rango: últimos **30 días**.  
+`?range=ALL` (o ausencia de fechas en algunos endpoints) → **sin filtro de fecha**, historial completo.
 
 ### 7.1 Stats
 
@@ -402,14 +419,21 @@ Respuesta `DashboardStatsDto`:
 
 | Campo | Descripción |
 |---|---|
-| `total` | Total de eventos en el rango |
-| `topEventTypes` | Top 20 tipos de eventos con conteo y % |
+| `total` / `totalEvents` | Total de eventos en el rango (mismo valor, dos alias) |
+| `errorCount` | Eventos de error en el rango (criterio multicampo) |
+| `successCount` | Eventos exitosos en el rango |
+| `errorRate` | Tasa de error en el rango (%) |
+| `healthStatus` | Salud del rango: `STABLE`, `WARNING`, `CRITICAL`, `INACTIVE` |
+| `overallHealth` | Salud general del sistema (histórica) |
+| `activeCases` | `caseId` únicos en el rango |
+| `totalHistoricalLogs` | Total histórico de logs del sistema (sin filtro de fecha) |
+| `topEventTypes` | Top tipos de eventos con conteo y % |
 | `outcomes` | Distribución de outcomes (`SUCCESS`, `FAILURE`, etc.) |
 | `severities` | Distribución de severidades |
 | `statuses` | Distribución de estados |
-| `topTags` | Top 20 tags más usados (desanida el array `tags` con `$unwind`) |
-| `topLocations` | Top 20 ubicaciones por nombre |
-| `topActors` | Top 20 actores por username |
+| `topTags` | Top tags más usados (desanida el array `tags` con `$unwind`) |
+| `topLocations` | Top ubicaciones por nombre |
+| `topActors` | Top actores por username |
 | `environments` | Distribución por entorno |
 
 Cada ítem de distribución tiene: `{ value, count, pct }` donde `pct` es porcentaje con 1 decimal.
@@ -459,7 +483,8 @@ GET /api/logs/dashboard/geo?system=ACCESS_CONTROL
 
 - Solo incluye logs que tengan `geo.coordinates`.
 - Limitado a **2000 puntos** para no saturar el navegador.
-- Agrupa coordenadas iguales sumando su conteo.
+- Agrupa por `caseId` (identificador del dispositivo) y toma el log más reciente de cada dispositivo.
+- Aplica filtro de integridad sobre `caseId` (debe cumplir patrón `^[A-Z]+[-_][A-Za-z0-9]` y mínimo 5 chars).
 
 Respuesta `DashboardGeoDto`:
 
@@ -467,7 +492,8 @@ Respuesta `DashboardGeoDto`:
 {
   "total": 1500,
   "points": [
-    { "lon": -99.1332, "lat": 19.4326, "count": 45 },
+    { "lon": -99.1332, "lat": 19.4326, "count": 45,
+      "caseId": "DEV-001", "usuario": "jgarcia", "ip": "192.168.1.100" },
     ...
   ]
 }
@@ -483,18 +509,18 @@ GET /api/logs/dashboard/systems-health
 
 - Analiza las **últimas 24 horas** para todos los sistemas del tenant.
 - Calcula `errorRate = failures / total` donde `failures` = eventos con `outcome = FAILURE`.
-- Los umbrales son configurables por sistema en `AlertThresholdConfig`.
+- Umbrales fijos por tasa de error.
 
 Estados posibles:
 
 | Status | Condición |
 |---|---|
 | `INACTIVE` | Sin logs en las últimas 24h |
-| `HEALTHY` | errorRate < umbral WARN |
-| `WARN` | errorRate ≥ umbral WARN |
-| `CRIT` | errorRate ≥ umbral CRIT |
+| `CRITICAL` | errorRate > 10% |
+| `WARNING` | 1% ≤ errorRate ≤ 10% |
+| `STABLE` | errorRate < 1% |
 
-- Resultado ordenado: `CRIT` → `WARN` → `HEALTHY` → `INACTIVE`.
+- Resultado ordenado: `CRITICAL` → `WARNING` → `STABLE` → `INACTIVE`.
 - El RBAC aplica: un VIEWER solo ve los sistemas a los que tiene acceso.
 
 ---
@@ -505,16 +531,17 @@ Estados posibles:
 **Clase Java:** `backlogs.dinamico.model.log.Device`  
 **Service:** `DeviceRegistryService`
 
-Cada vez que llega un log, el sistema **auto-registra o actualiza** el dispositivo que lo envió usando `upsertFromLog()`. No requiere configuración previa — el registro es automático.
+Cada vez que llega un log, el sistema **auto-registra o actualiza** el dispositivo que lo envió usando `upsertFromLog()`. No requiere configuración previa — el registro es automático. Se aplican filtros de integridad: se rechazan `deviceId` nulos, `"-"` o de menos de 5 caracteres.
 
 ### Campos del Dispositivo
 
 | Campo | Fuente en el Log | Descripción |
 |---|---|---|
-| `deviceId` | `caseId` del log | Identificador único del dispositivo |
+| `deviceId` | `actor.fullName` del log (fallback: `caseId`) | Identificador único del dispositivo |
 | `system` | `system` del log | Sistema al que pertenece |
 | `type` | `actor.type` del log | Tipo: `SERVER`, `PC`, `SWITCH`, `CAMERA` |
-| `ip` | `meta.ip` del log | IP del dispositivo |
+| `ip` | `meta.ip` del log | IP principal del dispositivo |
+| `ipInterfaces` | Calculado (`classifyIp`) | Mapa de interfaces clasificadas por ámbito: claves `privada`, `publica`, `loopback` |
 | `hostname` | `actor.fullName` del log | Nombre del host |
 | `latitude` / `longitude` | `geo.coordinates` del log | Ubicación geográfica |
 | `locationName` | `location.name` del log | Nombre de la ubicación |
@@ -538,7 +565,7 @@ Authorization: Bearer <jwt>
 
 Respuesta: `{ total, online, offline, byType: {servers, pcs, switches, cameras}, devices: [...] }`
 
-> **Nota:** El status (`ONLINE`/`OFFLINE`) **no se almacena** en MongoDB — se calcula en cada consulta comparando `lastSeen` contra el umbral de **10 minutos**.
+> **Nota:** El status (`ONLINE`/`OFFLINE`) **no se almacena** en MongoDB — se calcula en cada consulta comparando `lastSeen` contra el umbral de **10 minutos** (`OFFLINE_THRESHOLD_MINUTES`).
 
 ---
 
@@ -568,12 +595,15 @@ if (isAdmin || isOwner) {
 }
 ```
 
+El acceso por sistema se valida con `ScopeGuard.requireSystemAccess` + `AuthUser.allowedSystems` / `isOrgWide` (bypass para `ORG_ADMIN`/`ORG_OWNER`).
+
 ### LogFilterCriteria — Filtros de Visibilidad de Logs
 
-`LogFilterCriteria.apply(criteria)` añade restricciones adicionales de visibilidad al nivel de campo:
+`infra/security/LogFilterCriteria.apply(criteria)` añade restricciones adicionales de visibilidad al nivel de campo:
 
-- Un VIEWER puede tener `logFilters` en su rol que limitan qué **outcomes, statuses, severities o eventTypes** puede ver.
-- Se aplica automáticamente en: `search`, `all`, `timeline`, `stats`, `series`, `http`, `geo`.
+- Un VIEWER puede tener `logFilters` en su rol que limitan qué **outcomes, statuses, severities o eventTypes** puede ver (`UserRole.LogFilter`: `allowedOutcomes`, `allowedStatuses`, `allowedSeverities`, `allowedEventTypes`).
+- Se invoca explícitamente en: `LogEventService.all`, `LogEventService.search`, `LogEventService.timeline` y `LogDashboardService.buildBaseCriteria` (cubre stats, series, http, geo y systems-health).
+- Si el usuario no tiene filtros configurados, devuelve el `Criteria` sin cambios.
 
 ```java
 // Uso estándar en cualquier servicio de logs — una sola línea:
@@ -596,20 +626,24 @@ Authorization: Bearer <jwt>
 
 **Clase:** `DashboardNotifier`  
 **Protocolo:** STOMP sobre WebSocket  
-**Endpoint de conexión:** `/ws`
+**Endpoint de conexión:** `/ws` (con y sin SockJS; broker en memoria `/topic` y `/queue`, prefijo de aplicación `/app`)
 
 Cuando se ingesta un log, el backend publica automáticamente en:
 
 ```
-/topic/dashboard/{tenantId}/{SYSTEM_UPPERCASE}
+/topic/dashboard/{tenantId}/{SYSTEM_UPPERCASE}   ← evento ligero "hay logs nuevos"
+/topic/logs/{SYSTEM_UPPERCASE}                   ← el LogEvent completo recién persistido
+/topic/system-health                             ← salud de sistemas (mapa por sistema)
+```
 
 Ejemplo:
+```
 /topic/dashboard/696a76bddc3d6cd1487cdd35/TICKETS
 ```
 
-El frontend se suscribe a este topic cuando el usuario selecciona un sistema en el dashboard. Al recibir el evento, el frontend **re-llama** los endpoints de `/stats`, `/series`, etc. para actualizar las gráficas sin necesidad de polling.
+El frontend se suscribe a estos topics cuando el usuario selecciona un sistema en el dashboard. Al recibir el evento, el frontend **re-llama** los endpoints de `/stats`, `/series`, etc. para actualizar las gráficas sin necesidad de polling.
 
-**Payload del evento WebSocket:**
+**Payload del evento WebSocket** (`/topic/dashboard/{tenantId}/{system}`):
 ```json
 {
   "type": "NEW_LOGS",
@@ -619,19 +653,21 @@ El frontend se suscribe a este topic cuando el usuario selecciona un sistema en 
 }
 ```
 
+**Payload de `/topic/system-health`:** mapa `{system, tenantId, timestamp, totalEvents24h, errorCount24h, errorRate, healthStatus}` calculado con `DashboardLogService.getStats` sobre las últimas 24h. Cada publicación también **invalida la entrada del caché Caffeine** (`SYSTEM_STATS_CACHE`, clave `tenantId_system_*`) para que la próxima consulta recalcule.
+
 > Si el WebSocket falla al publicar, se loguea un `WARN` pero **no interrumpe** el flujo de ingesta del log.
 
 ---
 
 ## 11. Retención de Logs
 
-**Scheduler:** `LogRetentionScheduler`  
+**Scheduler:** `LogRetentionScheduler` — `@Scheduled(cron = "0 0 3 * * *", zone = "America/Mexico_City")`  
 **Service:** `LogRetentionService`  
-**Ejecución:** Diaria a las **3:00 AM hora Ciudad de México** (cron: `0 0 3 * * *`)
+**Ejecución:** Diaria a las **3:00 AM hora Ciudad de México**
 
 - Elimina logs de `log_events` más antiguos que `retentionDays` configurado por organización.
-- **Default: 90 días** si la organización no tiene configuración de retención.
-- Las **métricas agregadas** (`ai_metric_records`) y **alertas** (`ai_alerts`) **NO se eliminan**.
+- **Default: 90 días** (`DEFAULT_RETENTION_DAYS = 90`) si la organización no tiene configuración de retención.
+- Las **métricas agregadas** (`ai_metrics`) y **alertas** (`ai_alerts`) **NO se eliminan**.
 - Procesa en **lotes de 1000** documentos con pausa de 100ms entre lotes para no bloquear MongoDB.
 - Itera sobre todas las organizaciones activas (estado ≠ `disabled`).
 
@@ -659,12 +695,17 @@ La colección `log_events` tiene índices compuestos diseñados para los patrone
 | `idx_tenant_system_location_time_v2` | `tenant_id, system, location.id, eventTime DESC` | Filtro por ubicación |
 | `idx_tenant_time_isError_msgKey_v1` | `tenant_id, eventTime DESC, isError, messageKey` | Análisis de errores frecuentes por Eva |
 | `idx_tenant_system_eventCode_time_v2` | `tenant_id, system, eventCode, eventTime DESC` | Filtro por código de evento |
+| `idx_system_time_v1` | `system, eventTime DESC` | Listado global por sistema + fecha (sin tenant) |
+| `idx_system_time_status_outcome_severity_v1` | `system, eventTime DESC, status, outcome, severity` | Agregaciones del dashboard por sistema |
+| `idx_time_status_v1` | `eventTime DESC, status` | Series temporales por estado |
 | `geo_2dsphere` | `geo` (GeoSpatial) | Consultas geoespaciales y mapa de calor |
 
 **Índice único en `devices_registry`:**
 ```
 idx_device_tenant_deviceId: { tenantId: 1, deviceId: 1 } unique: true
 ```
+
+> ⚠️ Existe una clase huérfana `model/runtime/LogEvent` (deprecada, `@Deprecated(forRemoval=true)`) que declara índices obsoletos (`ix_main_time`, `ix_sev_time`, `ix_err_time`) sobre la misma colección. Si la auto-creación de índices de Spring Data sigue activa pueden crearse en Mongo; es candidata a eliminación.
 
 ---
 
@@ -674,8 +715,9 @@ idx_device_tenant_deviceId: { tenantId: 1, deviceId: 1 } unique: true
 |---|---|---|
 | `log_events` | Eventos de log — colección principal | Configurable por org (default 90 días) |
 | `devices_registry` | Dispositivos detectados automáticamente | Permanente (upsert) |
-| `ai_metric_records` | Métricas agregadas calculadas por Eva | **No eliminadas** por retención |
+| `ai_metrics` | Métricas agregadas calculadas por Eva | **No eliminadas** por retención |
 | `ai_alerts` | Alertas generadas por Eva | **No eliminadas** por retención |
+| `logs` | Logs legacy (modelo `LogEntry`) — API antigua | Según retención |
 
 ---
 
@@ -683,29 +725,40 @@ idx_device_tenant_deviceId: { tenantId: 1, deviceId: 1 } unique: true
 
 ```
 controller/logs/
-├── LogEventController       → POST /api/logs/events (ingest, batch) + GET (search, all, detail)
+├── LogEventController       → POST /api/logs/events (ingest, batch) + GET (search, all, detail, timeline)
 ├── LogDashboardController   → GET /api/logs/dashboard/* (stats, series, http, geo, systems-health)
 ├── DeviceController         → GET /api/devices (listado de dispositivos filtrable)
-└── LogIngestController      → (ingesta alternativa / legacy)
+├── LogIngestController      → POST /api/logs (ingesta legacy)
+└── LogQueryController       → GET /api/logs* (consulta legacy)
 
 service/logs/
 ├── LogEventService          → Lógica de ingest, search, all, timeline, getById
 ├── LogDashboardService      → Aggregation pipelines para todas las vistas del dashboard
 ├── DeviceRegistryService    → Auto-registro y consulta de dispositivos
-├── EventTypeNormalizer      → Separa "APP_EVENT_1034" → {category, code, raw}
-├── LogNormalizationUtils    → normalizeSeverity, buildMessageKey, computeIsError
 ├── LogRetentionService      → Eliminación de logs expirados por org
-└── LogRetentionScheduler    → Cron diario 3AM que ejecuta la retención
+├── LogRetentionScheduler    → Cron diario 3AM que ejecuta la retención
+├── EventTypeNormalizer      → Separa "APP_EVENT_1034" → {category, code, raw}
+└── LogNormalizationUtils    → normalizeSeverity, buildMessageKey, computeIsError
+
+service/normalization/
+├── SeverityNormalizer           → Recalcula severity al persistir (status/outcome/reason + mapeo raw)
+├── LogEventNormalizationListener → AbstractMongoEventListener: onBeforeConvert del LogEvent
+└── LogEventNormalizationCallback → BeforeConvertCallback (duplica la normalización del listener)
+
+service/dashboard/
+└── DashboardLogService      → Stats optimizadas ($facet, hint, caché Caffeine) usadas por DashboardNotifier
 
 infra/security/
-└── LogFilterCriteria        → Aplica filtros de visibilidad del usuario a cualquier Criteria
+├── LogFilterCriteria        → Aplica filtros de visibilidad del usuario a cualquier Criteria
+└── ApiKeyTenantFilter       → Resuelve tenant desde X-Api-Key en rutas /api/logs*
 
 infra/ws/
-└── DashboardNotifier        → Publica eventos WebSocket al topic del sistema
+└── DashboardNotifier        → Publica eventos WebSocket (dashboard, logs, system-health)
 
 model/log/
 ├── LogEvent                 → Documento MongoDB principal (log_events)
-└── Device                   → Documento MongoDB de dispositivos (devices_registry)
+├── Device                   → Documento MongoDB de dispositivos (devices_registry)
+└── LogEntry                 → Documento MongoDB legacy (logs)
 
 api/dto/logs/
 ├── LogEventIngestReq        → DTO de entrada para ingesta (record con nested records)
@@ -782,6 +835,25 @@ Content-Type: application/json
     "description": "El agente resolvió el ticket tras diagnóstico remoto"
   },
 
+  "remoteConnection": {
+    "sourceIp": "187.190.45.12",
+    "sourcePort": 51234,
+    "destinationIp": "10.0.0.15",
+    "destinationPort": 22,
+    "protocol": "SSH",
+    "authMethod": "KEY",
+    "authResult": "SUCCESS",
+    "user": "soporte",
+    "sessionId": "ssh-9f8e7d",
+    "sessionDuration": 1800,
+    "clientType": "TERMINAL",
+    "sourceCountry": "MX",
+    "sourceCity": "Ciudad de México",
+    "isLocalNetwork": false,
+    "riskScore": 0.12,
+    "metadata": { "clientVersion": "OpenSSH_8.9" }
+  },
+
   "tags": ["support", "resolved", "priority-high"],
 
   "payload": {
@@ -807,9 +879,9 @@ Content-Type: application/json
   "eventCode": "1034",
   "eventTypeRaw": "APP_EVENT_1034",
   "severity": "INFO",
+  "severityRaw": "INFO",
   "messageKey": "ticket tkt-{n} resuelto por el agente",
   "isError": false,
   "schemaVersion": 1
 }
 ```
-

@@ -96,6 +96,8 @@ public class LogEventController {
             @RequestParam(required = false) String locationId,
             @RequestParam(required = false) String requestId,
 
+            @RequestParam(required = false) String deviceId,
+
             @RequestParam(required = false) String text,
 
             @RequestParam(required = false)
@@ -128,6 +130,7 @@ public class LogEventController {
                 actorId,
                 locationId,
                 requestId,
+                deviceId,
                 text,
                 page,
                 size,

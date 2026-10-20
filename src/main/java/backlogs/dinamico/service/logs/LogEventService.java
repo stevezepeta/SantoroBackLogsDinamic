@@ -149,6 +149,7 @@ public class LogEventService {
             String actorId,
             String locationId,
             String requestId,
+            String deviceId,
             String text,
             int page,
             int size,
@@ -212,6 +213,29 @@ public class LogEventService {
         if (StringUtils.hasText(actorId))    cs.add(Criteria.where("actor.id").is(normalize(actorId)));
         if (StringUtils.hasText(locationId)) cs.add(Criteria.where("location.id").is(normalize(locationId)));
         if (StringUtils.hasText(requestId))  cs.add(Criteria.where("correlation.requestId").is(normalize(requestId)));
+
+        // DEVICE: coincidencia EXACTA (sin prefijos ni regex).
+        // Un dispositivo tiene varias identidades legítimas y verificables:
+        //   - meta.deviceId  → identidad que el agente escribe en cada evento
+        //     (hostname + último octeto de IP, p. ej. "WIN-MHRBTECSCC7-8")
+        //   - actor.id       → el agente (p. ej. datalogs-agent) también escribe
+        //     ahí la identidad de la máquina; coincide con meta.deviceId
+        //   - actor.fullName → identidad con la que se auto-registra en el Device
+        //     Registry (Device.deviceId = actor.fullName, fallback caseId — ver
+        //     DeviceRegistryService.upsertFromLog y docs/DASHBOARD_LOGS.md).
+        //     Es el valor del marcador que muestra el frontend (p. ej.
+        //     "WIN-MHRBTECSCC7", sin sufijo de IP).
+        // Las tres son igualdades exactas sobre el MISMO equipo; ninguna usa
+        // prefijo, por lo que equipos distintos con nombres similares jamás
+        // se mezclan.
+        if (StringUtils.hasText(deviceId)) {
+            String dev = deviceId.trim();
+            cs.add(new Criteria().orOperator(
+                    Criteria.where("meta.deviceId").is(dev),
+                    Criteria.where("actor.id").is(dev),
+                    Criteria.where("actor.fullName").is(dev)
+            ));
+        }
 
         if (StringUtils.hasText(text)) {
             Pattern p = Pattern.compile(".*" + Pattern.quote(text.trim()) + ".*", Pattern.CASE_INSENSITIVE);
