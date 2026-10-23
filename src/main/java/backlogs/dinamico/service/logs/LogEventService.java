@@ -147,6 +147,7 @@ public class LogEventService {
             String outcome,
             String severity,
             String actorId,
+            String username,
             String locationId,
             String requestId,
             String deviceId,
@@ -211,6 +212,11 @@ public class LogEventService {
         if (StringUtils.hasText(severity))   cs.add(Criteria.where("severity").is(normalizeUpper(severity)));
 
         if (StringUtils.hasText(actorId))    cs.add(Criteria.where("actor.id").is(normalize(actorId)));
+        // USERNAME: igualdad exacta sobre actor.username (mismo valor que envía
+        // el emisor en ingest). Si el frontend envía username, el filtro es
+        // obligatorio: sin este criterio la consulta devolvería eventos de
+        // todos los usuarios del sistema.
+        if (StringUtils.hasText(username))   cs.add(Criteria.where("actor.username").is(normalize(username)));
         if (StringUtils.hasText(locationId)) cs.add(Criteria.where("location.id").is(normalize(locationId)));
         if (StringUtils.hasText(requestId))  cs.add(Criteria.where("correlation.requestId").is(normalize(requestId)));
 

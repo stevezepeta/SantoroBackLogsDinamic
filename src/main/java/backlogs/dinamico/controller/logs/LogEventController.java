@@ -93,6 +93,7 @@ public class LogEventController {
             @RequestParam(required = false) String severity,
 
             @RequestParam(required = false) String actorId,
+            @RequestParam(required = false) String username,
             @RequestParam(required = false) String locationId,
             @RequestParam(required = false) String requestId,
 
@@ -128,6 +129,7 @@ public class LogEventController {
                 outcome,
                 severity,
                 actorId,
+                username,
                 locationId,
                 requestId,
                 deviceId,
